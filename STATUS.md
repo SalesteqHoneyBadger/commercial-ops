@@ -1,3 +1,3 @@
 # STATUS
 
-_Awaiting Director agent initialization._
+_Awaiting Manager agent initialization._
