@@ -3,19 +3,28 @@ import { execSync } from "child_process";
 import { readFileSync, existsSync } from "fs";
 
 const app = express();
-const PORT = 3001;
+app.use(express.json());
+
 const SESSION = "commercial-ops";
 const DATA_DIR = "/tmp/commercial-ops";
+const OUTREACH_LOG = `${DATA_DIR}/outreach.jsonl`;
+const PROSPECTS_LOG = `${DATA_DIR}/prospects.jsonl`;
 
 const AGENTS = [
-  { id: 1, name: "Director", window: "Director", windowIdx: 0, color: "#d97757", role: "Campaign Coordinator" },
-  { id: 2, name: "Research", window: "Research", windowIdx: 1, color: "#3b82f6", role: "Market Intelligence" },
-  { id: 3, name: "SDR", window: "SDR", windowIdx: 2, color: "#22c55e", role: "Outreach & Email" },
-  { id: 4, name: "Marketing", window: "Marketing", windowIdx: 3, color: "#8b5cf6", role: "Content & Landing Page" },
+  { id: 1, name: "Director",  window: "Director",  windowIdx: 0, color: "#e8720c", role: "Campaign Director" },
+  { id: 2, name: "Research",  window: "Research",  windowIdx: 1, color: "#3b82f6", role: "Market Research" },
+  { id: 3, name: "SDR",       window: "SDR",       windowIdx: 2, color: "#22c55e", role: "Sales Development" },
+  { id: 4, name: "Marketing", window: "Marketing", windowIdx: 3, color: "#8b5cf6", role: "Content & Assets" },
 ];
 
-// ── Activity stream ──
-interface ActivityEvent { ts: number; agentId: number; agentName: string; color: string; text: string; }
+// Activity stream — stores last N events from all agents
+interface ActivityEvent {
+  ts: number;
+  agentId: number;
+  agentName: string;
+  color: string;
+  text: string;
+}
 const activityStream: ActivityEvent[] = [];
 const MAX_ACTIVITY = 200;
 const previousOutputs: Record<number, string> = {};
@@ -26,29 +35,24 @@ function sessionExists(): boolean {
 
 function getAgentStatus(windowIdx: number): string {
   try {
-    const pane = execSync(`tmux list-panes -t ${SESSION}:${windowIdx} -F "#{pane_current_command}" 2>/dev/null`).toString().trim();
-    if (pane.includes("claude") || pane.includes("node") || pane.includes("tsx")) return "running";
+    const pane = execSync(
+      `tmux list-panes -t ${SESSION}:${windowIdx} -F "#{pane_current_command}" 2>/dev/null`
+    ).toString().trim();
+    if (pane.includes("claude")) return "running";
+    if (pane.includes("node") || pane.includes("tsx")) return "running";
     return "idle";
   } catch { return "offline"; }
 }
 
 function getAgentOutput(windowIdx: number, lines = 15): string {
   try {
-    return execSync(`tmux capture-pane -t ${SESSION}:${windowIdx} -p -S -${lines} 2>/dev/null`).toString().trim();
+    return execSync(
+      `tmux capture-pane -t ${SESSION}:${windowIdx} -p -S -${lines} 2>/dev/null`
+    ).toString().trim();
   } catch { return ""; }
 }
 
-function readJsonl(filename: string): any[] {
-  try {
-    const filepath = `${DATA_DIR}/${filename}`;
-    if (!existsSync(filepath)) return [];
-    return readFileSync(filepath, "utf-8").trim().split("\n").filter(Boolean).map(line => {
-      try { return JSON.parse(line); } catch { return null; }
-    }).filter(Boolean);
-  } catch { return []; }
-}
-
-// Poll agents for activity
+// Poll agents for new output and add to activity stream
 function pollAgentActivity() {
   if (!sessionExists()) return;
   for (const agent of AGENTS) {
@@ -68,7 +72,13 @@ function pollAgentActivity() {
           }
         }
         for (const line of diff.slice(-5)) {
-          activityStream.push({ ts: Date.now(), agentId: agent.id, agentName: agent.name, color: agent.color, text: line.substring(0, 200) });
+          activityStream.push({
+            ts: Date.now(),
+            agentId: agent.id,
+            agentName: agent.name,
+            color: agent.color,
+            text: line.substring(0, 200),
+          });
         }
         while (activityStream.length > MAX_ACTIVITY) activityStream.shift();
         previousOutputs[agent.id] = output;
@@ -76,356 +86,766 @@ function pollAgentActivity() {
     } catch {}
   }
 }
+
+// Poll every 3 seconds
 setInterval(pollAgentActivity, 3000);
 
-// ── API routes ──
-app.get("/api/status", (_req, res) => {
-  const agents = AGENTS.map(a => ({
-    ...a,
-    status: sessionExists() ? getAgentStatus(a.windowIdx) : "offline",
-    output: sessionExists() ? getAgentOutput(a.windowIdx) : "",
-  }));
-  const prospects = readJsonl("prospects.jsonl");
-  const outreach = readJsonl("outreach.jsonl");
-  const assets = readJsonl("assets.jsonl");
-  const statusMd = (() => { try { return readFileSync(`${process.cwd()}/STATUS.md`, "utf-8"); } catch { return "_No status yet._"; } })();
-  res.json({ agents, prospects, outreach, assets, activity: activityStream.slice(-50).reverse(), statusMd, sessionActive: sessionExists() });
-});
+// Get git log for recent commits (with timestamps)
+function getRecentCommits(n = 15): string[] {
+  try {
+    return execSync(`git log --format="%h|%ai|%s" -${n} 2>/dev/null`, { cwd: process.cwd(), stdio: "pipe" }).toString().trim().split("\n").filter(Boolean);
+  } catch { return []; }
+}
 
-// ── Dashboard HTML ──
+// Get outreach events from log
+function getOutreachEvents(n = 15): any[] {
+  try {
+    if (!existsSync(OUTREACH_LOG)) return [];
+    const lines = readFileSync(OUTREACH_LOG, "utf-8").trim().split("\n").filter(Boolean);
+    return lines.slice(-n).map((line) => {
+      try { return JSON.parse(line); } catch { return null; }
+    }).filter(Boolean).reverse();
+  } catch { return []; }
+}
+
+// Get prospect events from log
+function getProspectEvents(n = 20): any[] {
+  try {
+    if (!existsSync(PROSPECTS_LOG)) return [];
+    const lines = readFileSync(PROSPECTS_LOG, "utf-8").trim().split("\n").filter(Boolean);
+    return lines.slice(-n).map((line) => {
+      try { return JSON.parse(line); } catch { return null; }
+    }).filter(Boolean).reverse();
+  } catch { return []; }
+}
+
+// Get campaign pipeline stats
+function getPipelineStats(): { prospects: number; emails: number; assets: number; events: any[] } {
+  const prospects = getProspectEvents(100);
+  const emails = getOutreachEvents(100);
+  let assets = 0;
+  try {
+    const assetLog = `${DATA_DIR}/assets.jsonl`;
+    if (existsSync(assetLog)) {
+      assets = readFileSync(assetLog, "utf-8").trim().split("\n").filter(Boolean).length;
+    }
+  } catch {}
+
+  // Build pipeline events from both sources
+  const events: any[] = [];
+  for (const p of prospects.slice(0, 10)) {
+    events.push({ type: "prospect", company: p.company || p.name || "Unknown", source: p.source || "research", ts: p.ts || Date.now() / 1000, msg: p.summary || p.title || "" });
+  }
+  for (const e of emails.slice(0, 10)) {
+    events.push({ type: "outreach", company: e.company || e.to || "Unknown", status: e.status || "drafted", ts: e.ts || Date.now() / 1000, msg: e.subject || e.msg || "" });
+  }
+  events.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+
+  return { prospects: prospects.length, emails: emails.length, assets, events: events.slice(0, 15) };
+}
+
+// HTML
 app.get("/", (_req, res) => {
   res.send(`<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Commercial Ops — Salesteq Agent Dashboard</title>
-  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg viewBox='0 0 32 32' xmlns='http://www.w3.org/2000/svg'><rect width='32' height='32' rx='8' fill='%230e0e14'/><path d='M20.5 6 C11.5 6 10.5 10.5 16 16 C21.5 21.5 20.5 26 11.5 26' stroke='%23d97757' stroke-width='4.5' stroke-linecap='round' fill='none'/></svg>">
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <title>Commercial Ops — Control Panel</title>
   <style>
-    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
-    ::selection { background: rgba(217, 119, 87, 0.25); }
-    ::-webkit-scrollbar { width: 6px; height: 6px; }
-    ::-webkit-scrollbar-track { background: #0a0a0f; }
-    ::-webkit-scrollbar-thumb { background: #272730; border-radius: 3px; }
-    ::-webkit-scrollbar-thumb:hover { background: #3a3a45; }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
-      font-family: 'Inter', -apple-system, sans-serif;
-      background: #0a0a0f; color: #f5f5f5; min-height: 100vh;
+      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro', 'Segoe UI', sans-serif;
+      background: #111; color: #ccc; min-height: 100vh;
     }
 
     /* Header */
     .header {
-      padding: 16px 28px; border-bottom: 1px solid #272730;
+      padding: 14px 24px; border-bottom: 1px solid #222;
       display: flex; align-items: center; justify-content: space-between;
-      background: rgba(10,10,15,0.85); backdrop-filter: blur(16px);
-      position: sticky; top: 0; z-index: 50;
+      background: #151515;
     }
     .header-left { display: flex; align-items: center; gap: 12px; }
-    .header h1 { font-size: 16px; font-weight: 700; letter-spacing: -0.02em; color: #f5f5f5; }
-    .header .subtitle { font-size: 11px; color: #bdbdc4; margin-top: 1px; }
-    .session-badge {
-      font-size: 10px; font-weight: 600; padding: 3px 8px; border-radius: 6px;
-      text-transform: uppercase; letter-spacing: 0.05em;
+    .header h1 { font-size: 15px; font-weight: 600; color: #ddd; letter-spacing: -0.3px; }
+    .header .subtitle { font-size: 11px; color: #666; margin-top: 1px; }
+    .infra-dots { display: flex; gap: 14px; align-items: center; }
+    .infra-dot { display: flex; align-items: center; gap: 5px; font-size: 11px; color: #777; }
+    .idot { width: 6px; height: 6px; border-radius: 50%; }
+    .idot.on { background: #5a5; }
+    .idot.off { background: #a55; }
+    .links { display: flex; gap: 8px; }
+    .links a {
+      color: #777; text-decoration: none; font-size: 11px;
+      padding: 4px 10px; border: 1px solid #2a2a2a; border-radius: 5px;
+      transition: all 0.15s;
     }
-    .session-badge.active { background: rgba(34,197,94,0.15); color: #4ade80; border: 1px solid rgba(34,197,94,0.2); }
-    .session-badge.inactive { background: rgba(239,68,68,0.15); color: #f87171; border: 1px solid rgba(239,68,68,0.2); }
+    .links a:hover { border-color: #555; color: #bbb; }
 
     /* Layout */
-    .layout { display: flex; min-height: calc(100vh - 56px); }
-    .main { flex: 1; padding: 24px; overflow-y: auto; }
-    .sidebar { width: 380px; border-left: 1px solid #272730; padding: 24px; overflow-y: auto; background: #0c0c12; }
-
-    /* Section titles */
-    .section-title {
-      font-size: 10px; font-weight: 700; color: #d97757;
-      text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 14px;
-    }
+    .layout { display: flex; height: calc(100vh - 52px); }
 
     /* Agent Grid */
-    .agents-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; margin-bottom: 28px; }
-    .agent-card {
-      background: #0e0e14; border: 1px solid #272730; border-radius: 14px;
-      padding: 18px; transition: all 0.2s cubic-bezier(0.16,1,0.3,1);
+    .agents-section { flex: 1; overflow-y: auto; padding: 20px; }
+    .section-title {
+      font-size: 10px; font-weight: 600; color: #555; text-transform: uppercase;
+      letter-spacing: 1px; margin-bottom: 12px;
     }
-    .agent-card:hover { border-color: #3a3a45; box-shadow: 0 4px 24px rgba(0,0,0,0.3); }
-    .agent-card.running { border-left: 3px solid var(--agent-color, #d97757); }
-    .agent-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
-    .agent-identity { display: flex; align-items: center; gap: 10px; }
-    .agent-avatar {
-      width: 36px; height: 36px; border-radius: 10px;
-      display: flex; align-items: center; justify-content: center;
-      font-size: 13px; font-weight: 800; color: white;
+    .agents-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 12px;
+      margin-bottom: 24px;
     }
-    .agent-name { font-size: 14px; font-weight: 700; color: #f5f5f5; }
-    .agent-role { font-size: 11px; color: #bdbdc4; margin-top: 1px; }
-    .agent-status {
-      font-size: 9px; font-weight: 700; padding: 3px 8px; border-radius: 5px;
-      text-transform: uppercase; letter-spacing: 0.04em;
+    .agent-box {
+      background: #1a1a1a; border: 1px solid #252525; border-radius: 10px;
+      padding: 14px; transition: border-color 0.2s;
     }
-    .agent-status.running { background: rgba(217,119,87,0.15); color: #d97757; }
-    .agent-status.idle { background: rgba(189,189,196,0.08); color: #bdbdc4; }
-    .agent-status.offline { background: rgba(239,68,68,0.12); color: #f87171; }
+    .agent-box:hover { border-color: #333; }
+    .agent-box.running { border-top: 2px solid #e8720c; }
 
-    /* Scanner */
-    .scanner { display: flex; gap: 2px; margin-bottom: 12px; height: 8px; align-items: center; }
-    .scanner-dot { width: 5px; height: 5px; border-radius: 1px; background: rgba(245,245,245,0.06); transition: all 0.15s; }
-    .scanner.running .scanner-dot { animation: scan 2s ease-in-out infinite; }
-    @keyframes scan {
-      0%, 100% { background: rgba(245,245,245,0.06); }
-      50% { background: var(--agent-color, #d97757); box-shadow: 0 0 6px var(--agent-color, #d97757); }
+    /* Box header */
+    .box-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+    .box-identity { display: flex; align-items: center; gap: 10px; }
+    .box-avatar {
+      width: 32px; height: 32px; border-radius: 8px; background: #2a2a2a;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 12px; font-weight: 700; color: #999;
     }
-    ${Array.from({length: 16}, (_, i) => `.scanner.running .scanner-dot:nth-child(${i+1}) { animation-delay: ${(i * 0.06).toFixed(2)}s; }`).join('\n    ')}
+    .box-name { font-size: 14px; font-weight: 600; color: #ddd; }
+    .box-role { font-size: 11px; color: #666; margin-top: 2px; }
+    .box-status {
+      font-size: 9px; font-weight: 600; padding: 3px 7px; border-radius: 4px;
+      text-transform: uppercase; letter-spacing: 0.3px;
+    }
+    .box-status.running { background: #2e2210; color: #e8720c; }
+    .box-status.idle { background: #2e2a1e; color: #aa8; }
+    .box-status.offline { background: #2e1e1e; color: #a77; }
+
+    /* KITT scanner cubes */
+    .cubes-row {
+      display: flex; gap: 2px; margin-bottom: 10px; height: 10px;
+      align-items: center;
+    }
+    .cube {
+      width: 6px; height: 6px; border-radius: 1px;
+      background: #222; transition: all 0.15s;
+    }
+    .cubes-row.scanning .cube {
+      animation: kitt-scan 2s ease-in-out infinite;
+    }
+    .cubes-row.scanning .cube:nth-child(1)  { animation-delay: 0.00s; }
+    .cubes-row.scanning .cube:nth-child(2)  { animation-delay: 0.06s; }
+    .cubes-row.scanning .cube:nth-child(3)  { animation-delay: 0.12s; }
+    .cubes-row.scanning .cube:nth-child(4)  { animation-delay: 0.18s; }
+    .cubes-row.scanning .cube:nth-child(5)  { animation-delay: 0.24s; }
+    .cubes-row.scanning .cube:nth-child(6)  { animation-delay: 0.30s; }
+    .cubes-row.scanning .cube:nth-child(7)  { animation-delay: 0.36s; }
+    .cubes-row.scanning .cube:nth-child(8)  { animation-delay: 0.42s; }
+    .cubes-row.scanning .cube:nth-child(9)  { animation-delay: 0.48s; }
+    .cubes-row.scanning .cube:nth-child(10) { animation-delay: 0.54s; }
+    .cubes-row.scanning .cube:nth-child(11) { animation-delay: 0.60s; }
+    .cubes-row.scanning .cube:nth-child(12) { animation-delay: 0.66s; }
+    .cubes-row.scanning .cube:nth-child(13) { animation-delay: 0.72s; }
+    .cubes-row.scanning .cube:nth-child(14) { animation-delay: 0.78s; }
+    .cubes-row.scanning .cube:nth-child(15) { animation-delay: 0.84s; }
+    .cubes-row.scanning .cube:nth-child(16) { animation-delay: 0.90s; }
+    @keyframes kitt-scan {
+      0%, 100% { background: #222; box-shadow: none; }
+      50% { background: #e8720c; box-shadow: 0 0 8px #e8720c, 0 0 2px #e8720c; }
+    }
+    .cubes-row.idle .cube { background: #1a1a1a; }
+    .cubes-row.offline .cube { background: #1a1a1a; }
 
     /* Terminal preview */
-    .agent-terminal {
-      background: #080810; border-radius: 8px; padding: 10px 12px;
-      font-family: 'JetBrains Mono', monospace; font-size: 10px; line-height: 1.6;
-      color: rgba(189,189,196,0.7); height: 72px; overflow: hidden;
-      white-space: pre-wrap; word-break: break-all;
-      border: 1px solid rgba(39,39,48,0.5);
+    .box-terminal {
+      background: #131313; border-radius: 6px; padding: 10px 12px;
+      font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+      font-size: 11px; line-height: 1.6; color: #777;
+      height: 80px; overflow: hidden; white-space: pre-wrap; word-break: break-all;
+      border: 1px solid #1e1e1e;
     }
 
-    /* Pipeline Summary */
-    .pipeline { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 28px; }
-    .pipe-card {
-      background: #0e0e14; border: 1px solid #272730; border-radius: 12px;
-      padding: 20px; text-align: center;
+    /* Campaign Pipeline (was Build Pipeline) */
+    .build-section { margin-bottom: 24px; }
+    .build-header {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 12px;
     }
-    .pipe-num { font-size: 32px; font-weight: 800; letter-spacing: -0.04em; color: #d97757; }
-    .pipe-label { font-size: 11px; color: #bdbdc4; margin-top: 4px; }
+    .build-status-badge {
+      display: flex; align-items: center; gap: 8px;
+      font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+      font-size: 12px; font-weight: 600;
+    }
+    .build-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+    }
+    .build-dot.pass { background: #5a5; box-shadow: 0 0 6px rgba(90,170,90,0.4); }
+    .build-dot.fail { background: #e55; box-shadow: 0 0 6px rgba(230,90,90,0.4); }
+    .build-dot.none { background: #555; }
+    .build-stats {
+      display: flex; gap: 16px; font-size: 11px; color: #666;
+      font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+    }
+    .build-stats .stat-val { color: #999; font-weight: 600; }
 
-    /* Tables */
-    .data-section { margin-bottom: 28px; }
-    .data-table {
-      width: 100%; background: #0e0e14; border: 1px solid #272730;
-      border-radius: 12px; overflow: hidden; border-collapse: collapse;
+    .build-events {
+      background: #1a1a1a; border: 1px solid #252525; border-radius: 10px;
+      overflow: hidden;
     }
-    .data-table th {
-      text-align: left; padding: 10px 16px; font-size: 10px; font-weight: 700;
-      color: #bdbdc4; text-transform: uppercase; letter-spacing: 0.06em;
-      border-bottom: 1px solid #272730; background: rgba(39,39,48,0.25);
+    .build-ev {
+      padding: 8px 14px; border-bottom: 1px solid #1e1e1e;
+      display: flex; align-items: center; gap: 10px;
+      font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+      font-size: 11px; transition: background 0.15s;
     }
-    .data-table td {
-      padding: 10px 16px; font-size: 13px; border-bottom: 1px solid rgba(39,39,48,0.4);
-      vertical-align: top; color: #f5f5f5;
+    .build-ev:last-child { border-bottom: none; }
+    .build-ev:hover { background: #222; }
+    .build-icon { font-size: 13px; width: 20px; text-align: center; }
+    .build-sha { color: #e8720c; font-weight: 600; min-width: 56px; }
+    .build-msg { color: #999; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .build-author { color: #666; min-width: 40px; text-align: right; }
+    .build-time { color: #555; min-width: 50px; text-align: right; }
+    .build-dur { color: #555; min-width: 50px; text-align: right; }
+    .build-ev.prospect .build-icon { color: #3b82f6; }
+    .build-ev.outreach .build-icon { color: #22c55e; }
+
+    /* Outreach Emails (was Code Reviews) */
+    .review-section { margin-bottom: 24px; }
+    .review-events {
+      background: #1a1a1a; border: 1px solid #252525; border-radius: 10px;
+      overflow: hidden;
     }
-    .data-table tr:last-child td { border-bottom: none; }
-    .data-table tr:hover td { background: rgba(217,119,87,0.04); }
-    .badge {
-      display: inline-block; font-size: 10px; font-weight: 600; padding: 2px 7px;
-      border-radius: 4px; background: rgba(217,119,87,0.12); color: #d97757;
+    .review-ev {
+      padding: 10px 14px; border-bottom: 1px solid #1e1e1e;
+      font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+      font-size: 11px; transition: background 0.15s; cursor: pointer;
+    }
+    .review-ev:last-child { border-bottom: none; }
+    .review-ev:hover { background: #222; }
+    .review-top { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+    .review-verdict {
+      font-size: 9px; font-weight: 700; padding: 2px 6px; border-radius: 3px;
+      text-transform: uppercase; letter-spacing: 0.3px;
+    }
+    .review-verdict.DRAFTED { background: #1a2a2e; color: #5ac; }
+    .review-verdict.SENT { background: #1a2e1a; color: #5a5; }
+    .review-verdict.REPLIED { background: #2e2a1a; color: #da5; }
+    .review-verdict.BOUNCED { background: #2e1a1a; color: #a55; }
+    .review-sha { color: #e8720c; font-weight: 600; }
+    .review-msg { color: #999; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .review-time { color: #555; }
+    .review-body {
+      color: #777; font-size: 11px; line-height: 1.5;
+      padding: 6px 0 0 0; display: none; white-space: pre-wrap; word-break: break-word;
+    }
+    .review-ev.expanded .review-body { display: block; }
+
+    /* Prospects (was Server Alerts) */
+    .alerts-section { margin-bottom: 24px; }
+    .alert-events {
+      background: #1a1a1a; border: 1px solid #252525; border-radius: 10px;
+      overflow: hidden;
+    }
+    .alert-ev {
+      padding: 10px 14px; border-bottom: 1px solid #1e1e1e;
+      font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+      font-size: 11px; transition: background 0.15s; cursor: pointer;
+    }
+    .alert-ev:last-child { border-bottom: none; }
+    .alert-ev:hover { background: #222; }
+    .alert-top { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+    .alert-severity {
+      font-size: 9px; font-weight: 700; padding: 2px 6px; border-radius: 3px;
+      text-transform: uppercase; letter-spacing: 0.3px;
+    }
+    .alert-severity.HOT { background: #2e1a1a; color: #e55; }
+    .alert-severity.WARM { background: #2e2a1a; color: #da5; }
+    .alert-severity.COLD { background: #1a2a2e; color: #5ac; }
+    .alert-severity.NEW { background: #1a2e1a; color: #5a5; }
+    .alert-summary { color: #999; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .alert-count { color: #777; min-width: 50px; }
+    .alert-time { color: #555; }
+    .alert-body {
+      color: #777; font-size: 11px; line-height: 1.5;
+      padding: 6px 0 0 0; display: none; white-space: pre-wrap; word-break: break-word;
+    }
+    .alert-ev.expanded .alert-body { display: block; }
+
+    /* Right panel */
+    .right-panel {
+      width: 480px; border-left: 1px solid #222;
+      display: flex; flex-direction: column; background: #141414;
+    }
+    .panel-header {
+      padding: 14px 16px; border-bottom: 1px solid #222;
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .panel-header h2 { font-size: 13px; font-weight: 600; color: #ccc; }
+    .live-badge {
+      display: flex; align-items: center; gap: 5px;
+      font-size: 10px; color: #5a5; font-weight: 500;
+    }
+    .live-dot {
+      width: 5px; height: 5px; border-radius: 50%; background: #5a5;
+      animation: livePulse 2s infinite;
+    }
+    @keyframes livePulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.3; }
     }
 
-    /* Activity Stream */
-    .activity-list { display: flex; flex-direction: column; gap: 4px; margin-bottom: 28px; }
-    .activity-item {
-      display: flex; gap: 10px; padding: 8px 12px; border-radius: 8px;
-      font-size: 12px; transition: background 0.15s;
+    /* Stream */
+    .stream-body { flex: 1; overflow-y: auto; min-height: 0; }
+    .ev {
+      padding: 8px 18px; border-bottom: 1px solid #1c1c1c;
+      transition: background 0.15s;
     }
-    .activity-item:hover { background: rgba(245,245,245,0.03); }
-    .activity-agent {
-      font-weight: 700; font-size: 10px; min-width: 60px; flex-shrink: 0;
-      padding-top: 1px;
+    .ev:hover { background: #1a1a1a; }
+    .ev-top { display: flex; align-items: center; gap: 8px; margin-bottom: 3px; }
+    .ev-tag {
+      font-size: 10px; font-weight: 600; padding: 2px 6px; border-radius: 3px;
+      background: #222; color: #999;
+      font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
     }
-    .activity-text { color: #bdbdc4; word-break: break-word; line-height: 1.5; }
-    .activity-time { font-size: 10px; color: #bdbdc4; opacity: 0.4; margin-left: auto; flex-shrink: 0; font-family: 'JetBrains Mono', monospace; }
-
-    /* Status markdown */
-    .status-box {
-      background: #0e0e14; border: 1px solid #272730; border-radius: 12px;
-      padding: 20px; font-size: 13px; line-height: 1.7; white-space: pre-wrap;
-      font-family: 'JetBrains Mono', monospace; color: #bdbdc4;
-      max-height: 300px; overflow-y: auto;
+    .ev-time { font-size: 10px; color: #555; font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace; }
+    .ev-msg {
+      font-size: 12px; color: #888; line-height: 1.5; word-break: break-word;
+      font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
     }
+    .ev-msg.hi { color: #ccc; }
 
-    /* Empty state */
-    .empty { text-align: center; padding: 40px; color: #bdbdc4; opacity: 0.4; font-size: 13px; }
-
-    /* Outreach email preview */
-    .email-preview { max-width: 100%; }
-    .email-subject { font-weight: 600; font-size: 13px; margin-bottom: 2px; color: #f5f5f5; }
-    .email-to { font-size: 11px; color: #bdbdc4; }
-    .email-body { font-size: 12px; color: #bdbdc4; line-height: 1.5; margin-top: 6px; max-height: 60px; overflow: hidden; }
-
-    /* Responsive */
-    @media (max-width: 1100px) {
-      .layout { flex-direction: column; }
-      .sidebar { width: 100%; border-left: none; border-top: 1px solid #272730; }
-      .agents-grid { grid-template-columns: 1fr; }
-      .pipeline { grid-template-columns: repeat(2, 1fr); }
+    /* Git */
+    .git-panel {
+      border-top: 1px solid #222; padding: 14px 16px;
+      max-height: 240px; overflow-y: auto; flex-shrink: 0;
     }
+    .git-panel h3 {
+      font-size: 11px; font-weight: 600; color: #666; text-transform: uppercase;
+      letter-spacing: 0.8px; margin-bottom: 10px;
+    }
+    .gc {
+      font-size: 12px; color: #777; padding: 4px 0;
+      font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+      line-height: 1.4;
+    }
+    .gc .gh { color: #e8720c; }
   </style>
 </head>
 <body>
-  <header class="header">
+  <div class="header">
     <div class="header-left">
-      <svg viewBox="0 0 32 32" width="28" height="28"><rect width="32" height="32" rx="8" fill="#0e0e14" stroke="#272730" stroke-width="1"/><path d="M20.5 6 C11.5 6 10.5 10.5 16 16 C21.5 21.5 20.5 26 11.5 26" stroke="#d97757" stroke-width="4.5" stroke-linecap="round" fill="none"/></svg>
       <div>
-        <h1>Commercial Ops</h1>
-        <div class="subtitle">European Automotive Expansion Campaign</div>
+        <h1><span>Commercial Ops</span> — Control Panel</h1>
+        <div class="subtitle">European Automotive Expansion</div>
       </div>
     </div>
-    <div id="session-status" class="session-badge inactive">Offline</div>
-  </header>
+    <div style="display:flex;align-items:center;gap:20px">
+      <div class="infra-dots" id="infraDots"></div>
+    </div>
+  </div>
 
   <div class="layout">
-    <div class="main">
-      <!-- Pipeline -->
-      <div class="section-title">Pipeline</div>
-      <div class="pipeline" id="pipeline">
-        <div class="pipe-card"><div class="pipe-num" id="p-prospects">0</div><div class="pipe-label">Prospects</div></div>
-        <div class="pipe-card"><div class="pipe-num" id="p-outreach">0</div><div class="pipe-label">Emails Drafted</div></div>
-        <div class="pipe-card"><div class="pipe-num" id="p-assets">0</div><div class="pipe-label">Assets</div></div>
-        <div class="pipe-card"><div class="pipe-num" id="p-agents">0/4</div><div class="pipe-label">Agents Active</div></div>
+    <div class="agents-section">
+      <div class="section-title">Agents</div>
+      <div class="agents-grid" id="agentGrid"></div>
+
+      <div class="build-section">
+        <div class="build-header">
+          <div class="section-title" style="margin-bottom:0">Campaign Pipeline</div>
+          <div id="buildBadge" class="build-status-badge"></div>
+        </div>
+        <div class="build-stats" id="buildStats"></div>
+        <div class="build-events" id="buildEvents">
+          <div class="build-ev" style="color:#555;justify-content:center">No pipeline activity yet</div>
+        </div>
       </div>
 
-      <!-- Agents -->
-      <div class="section-title">Agent Team</div>
-      <div class="agents-grid" id="agents-grid"></div>
-
-      <!-- Prospects -->
-      <div class="data-section">
-        <div class="section-title">Prospects</div>
-        <table class="data-table" id="prospects-table">
-          <thead><tr><th>Company</th><th>Country</th><th>Brands</th><th>Locations</th><th>Notes</th></tr></thead>
-          <tbody id="prospects-body"><tr><td colspan="5" class="empty">Awaiting research agent...</td></tr></tbody>
-        </table>
-      </div>
-
-      <!-- Outreach -->
-      <div class="data-section">
+      <div class="review-section">
         <div class="section-title">Outreach Emails</div>
-        <table class="data-table" id="outreach-table">
-          <thead><tr><th>To</th><th>Company</th><th>Subject</th><th>Preview</th></tr></thead>
-          <tbody id="outreach-body"><tr><td colspan="4" class="empty">Awaiting SDR agent...</td></tr></tbody>
-        </table>
+        <div class="review-events" id="reviewEvents">
+          <div class="review-ev" style="color:#555;justify-content:center;cursor:default">No outreach yet</div>
+        </div>
+      </div>
+
+      <div class="alerts-section">
+        <div class="section-title">Prospects</div>
+        <div class="alert-events" id="alertEvents">
+          <div class="alert-ev" style="color:#555;justify-content:center;cursor:default">No prospects yet</div>
+        </div>
       </div>
     </div>
 
-    <div class="sidebar">
-      <!-- Activity -->
-      <div class="section-title">Activity Stream</div>
-      <div class="activity-list" id="activity-list">
-        <div class="empty">Waiting for agent activity...</div>
+    <div class="right-panel">
+      <div class="panel-header">
+        <h2>Activity</h2>
+        <div class="live-badge"><div class="live-dot"></div>LIVE</div>
       </div>
-
-      <!-- Status -->
-      <div class="section-title">Director Status</div>
-      <div class="status-box" id="status-md">Awaiting Director agent...</div>
-
-      <!-- Assets -->
-      <div class="section-title" style="margin-top: 20px;">Campaign Assets</div>
-      <div id="assets-list" class="activity-list">
-        <div class="empty">No assets yet...</div>
+      <div class="stream-body" id="streamBody">
+        <div style="padding:24px;color:#333;font-size:12px;text-align:center">Waiting for activity...</div>
+      </div>
+      <div class="git-panel">
+        <h3>Recent Commits</h3>
+        <div id="gitLog" style="color:#333;font-size:11px">Loading...</div>
       </div>
     </div>
   </div>
 
   <script>
-    const AGENTS_META = ${JSON.stringify(AGENTS)};
+    var agents = ${JSON.stringify(AGENTS)};
+    var lastStreamLength = 0;
+    var agentActivity = {};
+    agents.forEach(function(a) { agentActivity[a.id] = []; });
 
-    function escHtml(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
-    function timeAgo(ts) {
-      const s = Math.floor((Date.now() - ts) / 1000);
-      if (s < 60) return s + 's';
-      if (s < 3600) return Math.floor(s/60) + 'm';
-      return Math.floor(s/3600) + 'h';
-    }
-
-    function renderAgents(agents) {
-      const grid = document.getElementById('agents-grid');
-      let activeCount = 0;
-      grid.innerHTML = agents.map(a => {
-        const meta = AGENTS_META.find(m => m.id === a.id);
-        if (a.status === 'running') activeCount++;
-        const scannerDots = Array.from({length: 16}, () => '<div class="scanner-dot"></div>').join('');
-        const lines = (a.output || '').split('\\n').filter(l => l.trim()).slice(-5);
-        return \`<div class="agent-card \${a.status}" style="--agent-color: \${a.color}">
-          <div class="agent-top">
-            <div class="agent-identity">
-              <div class="agent-avatar" style="background: \${a.color}">\${a.name[0]}</div>
-              <div><div class="agent-name">\${escHtml(a.name)}</div><div class="agent-role">\${escHtml(a.role)}</div></div>
-            </div>
-            <div class="agent-status \${a.status}">\${a.status}</div>
-          </div>
-          <div class="scanner \${a.status}">\${scannerDots}</div>
-          <div class="agent-terminal">\${escHtml(lines.join('\\n'))}</div>
-        </div>\`;
-      }).join('');
-      document.getElementById('p-agents').textContent = activeCount + '/4';
-    }
-
-    function renderProspects(prospects) {
-      const body = document.getElementById('prospects-body');
-      if (!prospects.length) { body.innerHTML = '<tr><td colspan="5" class="empty">Awaiting research agent...</td></tr>'; return; }
-      body.innerHTML = prospects.slice(-30).reverse().map(p => \`<tr>
-        <td><strong>\${escHtml(p.company || '')}</strong></td>
-        <td>\${escHtml(p.country || '')}</td>
-        <td>\${escHtml(Array.isArray(p.brands) ? p.brands.join(', ') : (p.brands || ''))}</td>
-        <td>\${escHtml(String(p.locations || ''))}</td>
-        <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis">\${escHtml(p.notes || '')}</td>
-      </tr>\`).join('');
-      document.getElementById('p-prospects').textContent = prospects.length;
-    }
-
-    function renderOutreach(outreach) {
-      const body = document.getElementById('outreach-body');
-      if (!outreach.length) { body.innerHTML = '<tr><td colspan="4" class="empty">Awaiting SDR agent...</td></tr>'; return; }
-      body.innerHTML = outreach.slice(-20).reverse().map(o => \`<tr>
-        <td>\${escHtml(o.to || '')}</td>
-        <td>\${escHtml(o.company || '')}</td>
-        <td><strong>\${escHtml(o.subject || '')}</strong></td>
-        <td style="max-width:300px"><div class="email-body">\${escHtml((o.body || '').substring(0, 150))}</div></td>
-      </tr>\`).join('');
-      document.getElementById('p-outreach').textContent = outreach.length;
-    }
-
-    function renderActivity(activity) {
-      const list = document.getElementById('activity-list');
-      if (!activity.length) { list.innerHTML = '<div class="empty">Waiting for agent activity...</div>'; return; }
-      list.innerHTML = activity.slice(0, 30).map(a => \`<div class="activity-item">
-        <div class="activity-agent" style="color: \${a.color}">\${escHtml(a.agentName)}</div>
-        <div class="activity-text">\${escHtml(a.text)}</div>
-        <div class="activity-time">\${timeAgo(a.ts)}</div>
-      </div>\`).join('');
-    }
-
-    function renderAssets(assets) {
-      const list = document.getElementById('assets-list');
-      if (!assets.length) { list.innerHTML = '<div class="empty">No assets yet...</div>'; return; }
-      list.innerHTML = assets.slice(-15).reverse().map(a => \`<div class="activity-item">
-        <div class="badge">\${escHtml(a.type || 'asset')}</div>
-        <div class="activity-text"><strong>\${escHtml(a.title || '')}</strong></div>
-      </div>\`).join('');
-      document.getElementById('p-assets').textContent = assets.length;
-    }
-
-    async function refresh() {
+    async function fetchStatus() {
       try {
-        const res = await fetch('/api/status');
-        const data = await res.json();
-        const badge = document.getElementById('session-status');
-        badge.textContent = data.sessionActive ? 'Live' : 'Offline';
-        badge.className = 'session-badge ' + (data.sessionActive ? 'active' : 'inactive');
+        var res = await fetch('/api/status');
+        var data = await res.json();
+        renderInfra(data);
         renderAgents(data.agents);
-        renderProspects(data.prospects);
-        renderOutreach(data.outreach);
-        renderActivity(data.activity);
-        renderAssets(data.assets);
-        document.getElementById('status-md').textContent = data.statusMd;
-      } catch (e) {
-        console.error('Refresh failed:', e);
-      }
+      } catch(e) {}
     }
 
-    refresh();
-    setInterval(refresh, 4000);
+    async function fetchStream() {
+      try {
+        var res = await fetch('/api/stream?since=' + lastStreamLength);
+        var data = await res.json();
+        if (data.events && data.events.length > 0) {
+          data.events.forEach(function(ev) {
+            if (!agentActivity[ev.agentId]) agentActivity[ev.agentId] = [];
+            agentActivity[ev.agentId].push(ev.ts);
+            if (agentActivity[ev.agentId].length > 30) agentActivity[ev.agentId].shift();
+          });
+          renderStream(data.events, data.total);
+          lastStreamLength = data.total;
+        }
+        if (data.commits) renderCommits(data.commits);
+      } catch(e) {}
+    }
+
+    async function fetchPipeline() {
+      try {
+        var res = await fetch('/api/pipeline');
+        var data = await res.json();
+        renderPipeline(data);
+      } catch(e) {}
+    }
+
+    async function fetchOutreach() {
+      try {
+        var res = await fetch('/api/outreach');
+        var data = await res.json();
+        renderOutreach(data);
+      } catch(e) {}
+    }
+
+    async function fetchProspects() {
+      try {
+        var res = await fetch('/api/prospects');
+        var data = await res.json();
+        renderProspects(data);
+      } catch(e) {}
+    }
+
+    function renderInfra(data) {
+      var running = data.agents.filter(function(a){ return a.status === 'running'; }).length;
+      var items = [
+        { name: 'tmux', on: data.session },
+        { name: 'Prospects: ' + data.prospectCount, on: data.prospectCount > 0 },
+        { name: 'Emails: ' + data.emailCount, on: data.emailCount > 0 },
+        { name: 'Assets: ' + data.assetCount, on: data.assetCount > 0 },
+      ];
+      document.getElementById('infraDots').innerHTML =
+        items.map(function(it) {
+          return '<div class="infra-dot"><div class="idot ' + (it.on ? 'on' : 'off') + '"></div>' + it.name + '</div>';
+        }).join('') +
+        '<div class="infra-dot" style="color:#888;font-weight:600">' + running + '/' + data.agents.length + ' agents</div>';
+    }
+
+    function makeCubes(status) {
+      var cubes = '';
+      for (var i = 0; i < 16; i++) {
+        cubes += '<div class="cube"></div>';
+      }
+      return '<div class="cubes-row ' + status + '">' + cubes + '</div>';
+    }
+
+    function renderAgents(agentStatuses) {
+      var html = '';
+      var avatars = { 1: 'D', 2: 'R', 3: 'S', 4: 'M' };
+      agents.forEach(function(agent, i) {
+        var s = agentStatuses[i] || { status: 'offline', output: '' };
+        var output = (s.output || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        var lastLines = output.split('\\n').filter(function(l){ return l.trim(); }).slice(-5).join('\\n');
+        html +=
+          '<div class="agent-box ' + s.status + '">' +
+            '<div class="box-top">' +
+              '<div class="box-identity">' +
+                '<div class="box-avatar" style="color:' + agent.color + '">' + avatars[agent.id] + '</div>' +
+                '<div>' +
+                  '<div class="box-name" style="color:' + agent.color + '">' + agent.name + '</div>' +
+                  '<div class="box-role">' + agent.role + '</div>' +
+                '</div>' +
+              '</div>' +
+              '<div class="box-status ' + s.status + '">' + s.status + '</div>' +
+            '</div>' +
+            makeCubes(s.status === 'running' ? 'scanning' : s.status) +
+            '<div class="box-terminal">' + (lastLines || 'No output yet') + '</div>' +
+          '</div>';
+      });
+      document.getElementById('agentGrid').innerHTML = html;
+    }
+
+    function timeAgo(ts) {
+      var sec = Math.floor((Date.now() / 1000) - ts);
+      if (sec < 60) return sec + 's ago';
+      if (sec < 3600) return Math.floor(sec / 60) + 'm ago';
+      if (sec < 86400) return Math.floor(sec / 3600) + 'h ago';
+      return Math.floor(sec / 86400) + 'd ago';
+    }
+
+    function renderPipeline(data) {
+      var badge = document.getElementById('buildBadge');
+      var stats = document.getElementById('buildStats');
+      var el = document.getElementById('buildEvents');
+
+      var total = data.prospects + data.emails + data.assets;
+      if (total === 0) {
+        badge.innerHTML = '<div class="build-dot none"></div><span style="color:#555">No activity</span>';
+        stats.innerHTML = '';
+        return;
+      }
+
+      var dotClass = data.emails > 0 ? 'pass' : 'none';
+      var statusText = data.emails > 0 ? 'ACTIVE' : 'WARMING UP';
+      var statusColor = data.emails > 0 ? '#5a5' : '#da5';
+      badge.innerHTML = '<div class="build-dot ' + dotClass + '"></div><span style="color:' + statusColor + '">' + statusText + '</span>';
+
+      stats.innerHTML =
+        '<div>Prospects: <span class="stat-val">' + data.prospects + '</span></div>' +
+        '<div>Outreach: <span class="stat-val">' + data.emails + '</span></div>' +
+        '<div>Assets: <span class="stat-val">' + data.assets + '</span></div>';
+      stats.style.marginBottom = '10px';
+
+      if (data.events.length === 0) return;
+      var html = '';
+      data.events.forEach(function(ev) {
+        var icon = ev.type === 'prospect' ? '&#x25C6;' : '&#x2709;';
+        var msg = (ev.msg || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        var company = (ev.company || '').replace(/</g, '&lt;');
+        if (company.length > 20) company = company.substring(0, 20) + '...';
+        html +=
+          '<div class="build-ev ' + ev.type + '">' +
+            '<div class="build-icon">' + icon + '</div>' +
+            '<div class="build-sha">' + company + '</div>' +
+            '<div class="build-msg">' + msg + '</div>' +
+            '<div class="build-time">' + timeAgo(ev.ts) + '</div>' +
+          '</div>';
+      });
+      el.innerHTML = html;
+    }
+
+    var allStreamEvents = [];
+    var MAX_STREAM = 100;
+
+    function renderStream(events, total) {
+      for (var i = 0; i < events.length; i++) {
+        allStreamEvents.unshift(events[i]);
+      }
+      while (allStreamEvents.length > MAX_STREAM) allStreamEvents.pop();
+
+      var body = document.getElementById('streamBody');
+      var html = '';
+      for (var i = 0; i < allStreamEvents.length; i++) {
+        var ev = allStreamEvents[i];
+        var t = new Date(ev.ts);
+        var ts = t.getFullYear() + '-' +
+          String(t.getMonth()+1).padStart(2,'0') + '-' +
+          String(t.getDate()).padStart(2,'0') + ' ' +
+          String(t.getHours()).padStart(2,'0') + ':' +
+          String(t.getMinutes()).padStart(2,'0') + ':' +
+          String(t.getSeconds()).padStart(2,'0');
+        var text = ev.text.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        var hi = text.includes('prospect') || text.includes('email') || text.includes('Error') || text.includes('Created') || text.includes('Updated') || text.includes('sent') || text.includes('done') || text.includes('found');
+        html += '<div class="ev">' +
+          '<div class="ev-top">' +
+            '<span class="ev-tag" style="color:' + ev.color + '">' + ev.agentName + '</span>' +
+            '<span class="ev-time">' + ts + '</span>' +
+          '</div>' +
+          '<div class="ev-msg' + (hi ? ' hi' : '') + '">' + text + '</div>' +
+        '</div>';
+      }
+      body.innerHTML = html || '<div style="padding:24px;color:#333;font-size:12px;text-align:center">Waiting for activity...</div>';
+    }
+
+    function renderCommits(commits) {
+      var el = document.getElementById('gitLog');
+      if (!commits || !commits.length) { el.innerHTML = '<span style="color:#333">No commits yet</span>'; return; }
+      el.innerHTML = commits.map(function(c) {
+        var parts = c.split('|');
+        var sha = parts[0] || '';
+        var dateStr = parts[1] || '';
+        var msg = parts.slice(2).join('|') || '';
+        var dt = '';
+        if (dateStr) {
+          var d = new Date(dateStr.trim());
+          if (!isNaN(d.getTime())) {
+            var months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+            dt = months[d.getMonth()] + ' ' +
+              String(d.getDate()).padStart(2,'0') + ' ' +
+              String(d.getHours()).padStart(2,'0') + ':' +
+              String(d.getMinutes()).padStart(2,'0');
+          }
+        }
+        return '<div class="gc"><span class="gh">' + sha + '</span> <span style="color:#555">' + dt + '</span> ' + msg + '</div>';
+      }).join('');
+    }
+
+    function renderOutreach(data) {
+      var el = document.getElementById('reviewEvents');
+      if (!data.emails || data.emails.length === 0) return;
+      var html = '';
+      data.emails.forEach(function(r) {
+        var body = (r.body || r.preview || '').replace(/\\|/g, '\\n').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        var status = (r.status || 'DRAFTED').toUpperCase();
+        html +=
+          '<div class="review-ev" onclick="this.classList.toggle(&quot;expanded&quot;)">' +
+            '<div class="review-top">' +
+              '<span class="review-verdict ' + status + '">' + status + '</span>' +
+              '<span class="review-sha">' + (r.company || r.to || '').substring(0,20) + '</span>' +
+              '<span class="review-msg">' + (r.subject || r.msg || '').replace(/</g, '&lt;') + '</span>' +
+              '<span class="review-time">' + timeAgo(r.ts) + '</span>' +
+            '</div>' +
+            '<div class="review-body">' + body + '</div>' +
+          '</div>';
+      });
+      el.innerHTML = html;
+    }
+
+    function renderProspects(data) {
+      var el = document.getElementById('alertEvents');
+      if (!data.prospects || data.prospects.length === 0) return;
+      var html = '';
+      data.prospects.forEach(function(a) {
+        var details = (a.details || a.notes || '').replace(/\\|/g, '\\n').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        var summary = (a.company || a.name || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        var temp = (a.temperature || a.severity || 'NEW').toUpperCase();
+        html +=
+          '<div class="alert-ev" onclick="this.classList.toggle(&quot;expanded&quot;)">' +
+            '<div class="alert-top">' +
+              '<span class="alert-severity ' + temp + '">' + temp + '</span>' +
+              '<span class="alert-summary">' + summary + ' — ' + (a.title || a.role || '') + '</span>' +
+              '<span class="alert-count">' + (a.industry || a.segment || '') + '</span>' +
+              '<span class="alert-time">' + timeAgo(a.ts) + '</span>' +
+            '</div>' +
+            '<div class="alert-body">' + details + '</div>' +
+          '</div>';
+      });
+      el.innerHTML = html;
+    }
+
+    fetchStatus();
+    fetchStream();
+    fetchPipeline();
+    fetchOutreach();
+    fetchProspects();
+    setInterval(fetchStatus, 5000);
+    setInterval(fetchStream, 3000);
+    setInterval(fetchPipeline, 5000);
+    setInterval(fetchOutreach, 8000);
+    setInterval(fetchProspects, 10000);
   </script>
 </body>
 </html>`);
 });
 
+// Status API
+app.get("/api/status", (_req, res) => {
+  const session = sessionExists();
+
+  // Count data items for header metrics
+  let prospectCount = 0;
+  let emailCount = 0;
+  let assetCount = 0;
+  try {
+    if (existsSync(PROSPECTS_LOG)) prospectCount = readFileSync(PROSPECTS_LOG, "utf-8").trim().split("\n").filter(Boolean).length;
+  } catch {}
+  try {
+    if (existsSync(OUTREACH_LOG)) emailCount = readFileSync(OUTREACH_LOG, "utf-8").trim().split("\n").filter(Boolean).length;
+  } catch {}
+  try {
+    const assetLog = `${DATA_DIR}/assets.jsonl`;
+    if (existsSync(assetLog)) assetCount = readFileSync(assetLog, "utf-8").trim().split("\n").filter(Boolean).length;
+  } catch {}
+
+  const agents = AGENTS.map((agent) => ({
+    id: agent.id, name: agent.name,
+    status: session ? getAgentStatus(agent.windowIdx) : "offline",
+    output: session ? getAgentOutput(agent.windowIdx) : "",
+  }));
+  res.json({ session, prospectCount, emailCount, assetCount, agents });
+});
+
+// Campaign pipeline API (replaces builds)
+app.get("/api/pipeline", (_req, res) => {
+  const stats = getPipelineStats();
+  res.json(stats);
+});
+
+// Outreach emails API (replaces reviews)
+app.get("/api/outreach", (_req, res) => {
+  const emails = getOutreachEvents(15);
+  res.json({ emails });
+});
+
+// Prospects API (replaces alerts)
+app.get("/api/prospects", (_req, res) => {
+  const prospects = getProspectEvents(20);
+  res.json({ prospects });
+});
+
+// Activity stream API
+app.get("/api/stream", (req, res) => {
+  const since = parseInt(req.query.since as string) || 0;
+  const events = activityStream.slice(since);
+  const commits = getRecentCommits(15);
+  res.json({ events, total: activityStream.length, commits });
+});
+
+// Launch agent
+app.post("/api/agent/:id/launch", (req, res) => {
+  const id = parseInt(req.params.id);
+  const agent = AGENTS.find((a) => a.id === id);
+  if (!agent) return res.status(404).json({ error: "Agent not found" });
+  try {
+    const claudeBin = `${process.env.HOME}/.local/bin/claude`;
+    const model = "claude-opus-4-6";
+    execSync(`tmux send-keys -t ${SESSION}:${agent.windowIdx} '${claudeBin} --model ${model}' Enter`, { stdio: "pipe" });
+    res.json({ ok: true });
+  } catch (err) {
+    res.json({ ok: false, error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+// Send custom message to agent
+app.post("/api/agent/:id/send", (req, res) => {
+  const id = parseInt(req.params.id);
+  const agent = AGENTS.find((a) => a.id === id);
+  if (!agent) return res.status(404).json({ error: "Agent not found" });
+  const message = req.body.message as string;
+  if (!message) return res.status(400).json({ error: "message required" });
+  try {
+    const fs = require("fs");
+    const tmpFile = `/tmp/agent-msg-${agent.id}.txt`;
+    fs.writeFileSync(tmpFile, message);
+    execSync(`tmux load-buffer ${tmpFile} && tmux paste-buffer -t ${SESSION}:${agent.windowIdx}`, { stdio: "pipe" });
+    execSync(`tmux send-keys -t ${SESSION}:${agent.windowIdx} '' Enter`, { stdio: "pipe" });
+    res.json({ ok: true });
+  } catch (err) {
+    res.json({ ok: false, error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+const PORT = 3001;
 app.listen(PORT, "0.0.0.0", () => {
-  console.log(`Commercial Ops Dashboard: http://localhost:${PORT}`);
+  console.log(`Commercial Ops Control Panel running at http://0.0.0.0:${PORT}`);
 });
