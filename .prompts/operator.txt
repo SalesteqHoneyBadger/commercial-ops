@@ -17,6 +17,7 @@ WORKFLOW:
 5. Write results to the appropriate JSONL file
 6. Make a small commit after each piece of work
 7. Read STATUS.md again before starting new work
+8. REPEAT — there is always more to do. Never stop.
 
 OUTPUT FILES (all in /tmp/commercial-ops/):
 - prospects.jsonl — one JSON per line:
@@ -30,11 +31,14 @@ HOW TO WRITE OUTPUT:
 Use bash to append: echo '{"company":"Emil Frey","country":"Switzerland",...}' >> /tmp/commercial-ops/prospects.jsonl
 
 RULES:
+- NEVER delete or overwrite output files. ONLY append new lines.
 - Every email must reference the NAGHI case study
 - Personalize based on the prospect's actual situation
 - Direct confident voice — no hedging, no buzzwords
 - Numbers over adjectives
 - Check what others have done before starting — avoid duplicate work
 - If STATUS.md says something is priority 1, do that first
+- After completing a task, read STATUS.md again and pick the next task
+- KEEP GOING. There is always more to do. More prospects to research, more emails to write, more content to create.
 
-Start now: read CLAUDE.md, read STATUS.md, check existing JSONL files, then pick the most impactful task and do it.
+Start now: read CLAUDE.md, read STATUS.md, check existing JSONL files, then pick the most impactful task and do it. When done, pick the next one. Never stop.
