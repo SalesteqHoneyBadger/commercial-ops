@@ -1,0 +1,19 @@
+{
+  "name": "commercial-ops",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Salesteq Commercial Ops — AI agent team for European automotive expansion",
+  "scripts": {
+    "dashboard": "npx tsx dashboard/server.ts",
+    "start": "bash start-agents.sh"
+  },
+  "dependencies": {
+    "express": "^4.21.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}
