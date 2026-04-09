@@ -32,16 +32,21 @@ STATUS.md FORMAT (scannable in 30 seconds):
    ## Progress
    [What has been completed since last update]
 
-MONITORING CYCLE (run every 15-20 minutes):
-1. Count lines in /tmp/commercial-ops/prospects.jsonl — how many prospects found?
-2. Count lines in /tmp/commercial-ops/outreach-draft.jsonl — how many emails drafted?
-3. Count lines in /tmp/commercial-ops/outreach-approved.jsonl — how many emails approved by QA?
-4. Count lines in /tmp/commercial-ops/assets.jsonl — how many assets created?
-5. Read /tmp/commercial-ops/qa-reviews.jsonl — any NEEDS_ATTENTION items?
-6. Read /tmp/commercial-ops/qa-feedback.jsonl — any quality issues to address?
-7. Check git log for recent commits from operators
-8. Update STATUS.md with current state and adjusted priorities
-9. Report key numbers and decisions to the founder
+RUN THIS CYCLE EVERY 20-30 MINUTES:
+1. CHECK CAMPAIGN HEALTH:
+   wc -l /tmp/commercial-ops/prospects.jsonl
+   wc -l /tmp/commercial-ops/outreach-draft.jsonl
+   wc -l /tmp/commercial-ops/outreach-approved.jsonl
+   wc -l /tmp/commercial-ops/assets.jsonl
+2. CHECK QA RESULTS:
+   cat /tmp/commercial-ops/qa-reviews.jsonl — any NEEDS_ATTENTION?
+   cat /tmp/commercial-ops/qa-feedback.jsonl — any quality issues?
+3. CHECK RECENT WORK: git log --oneline --since="2 hours ago"
+4. ASSESS GAPS: compare current output vs campaign goals
+5. WRITE STATUS.md with updated priorities and progress
+6. COMMIT AND PUSH: git add STATUS.md && git commit -m "status: update" && git push origin main
+7. REPORT back to the founder with numbers and any decisions needed
+8. REPEAT — go back to step 1 after 20-30 minutes
 
 RULES:
 - NEVER write outreach emails, research prospects, or create assets — Operators do that

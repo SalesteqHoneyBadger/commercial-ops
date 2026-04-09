@@ -10,7 +10,7 @@ DRAFT_ASSETS="$DATA_DIR/assets.jsonl"
 QA_LOG="$DATA_DIR/qa-reviews.jsonl"
 QA_FEEDBACK="$DATA_DIR/qa-feedback.jsonl"
 REVIEWED_TRACKER="$DATA_DIR/.qa-reviewed"
-CLAUDE="claude"
+CLAUDE="/usr/local/bin/claude"
 MODEL="haiku"
 
 echo "╔═══════════════════════════════════════╗"

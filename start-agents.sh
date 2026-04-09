@@ -62,17 +62,23 @@ echo "Launching Manager..."
 launch_agent 0 "Manager" "$REPO_DIR/.prompts/manager.txt"
 sleep 8
 
+# ── Generate numbered operator prompts ──
+for i in 1 2 3; do
+  cp "$REPO_DIR/.prompts/operator.txt" "$REPO_DIR/.prompts/operator-${i}.txt"
+  sed -i "s/operator-N/operator-${i}/g" "$REPO_DIR/.prompts/operator-${i}.txt"
+done
+
 # ── Launch Operators (Windows 1-3) — identical, full-capability ──
 echo "Launching Operator-1..."
-launch_agent 1 "Operator-1" "$REPO_DIR/.prompts/operator.txt"
+launch_agent 1 "Operator-1" "$REPO_DIR/.prompts/operator-1.txt"
 sleep 8
 
 echo "Launching Operator-2..."
-launch_agent 2 "Operator-2" "$REPO_DIR/.prompts/operator.txt"
+launch_agent 2 "Operator-2" "$REPO_DIR/.prompts/operator-2.txt"
 sleep 8
 
 echo "Launching Operator-3..."
-launch_agent 3 "Operator-3" "$REPO_DIR/.prompts/operator.txt"
+launch_agent 3 "Operator-3" "$REPO_DIR/.prompts/operator-3.txt"
 
 # ── Launch QA (Window 4) — bash script, not Claude Code ──
 echo "Launching QA..."
