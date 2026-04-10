@@ -24,6 +24,8 @@ touch "$DRAFT_OUTREACH" "$DRAFT_ASSETS" "$QA_LOG" "$QA_FEEDBACK" "$REVIEWED_TRAC
 
 LAST_OUTREACH_COUNT=0
 LAST_ASSETS_COUNT=0
+LANDING_PAGE="/root/commercial-ops/landing/index.html"
+LAST_LANDING_HASH=""
 
 while true; do
   # Count current lines
@@ -61,9 +63,11 @@ Check for:
 1. Does it reference the NAGHI Motors case study with accurate facts? (11+ brands, 250K vehicles/year, BMW/MINI exclusive dealer Saudi Arabia)
 2. Is it personalized to the specific prospect (not generic)?
 3. Tone: direct, confident, no buzzwords, no hedging?
-4. Is there a clear CTA?
+4. Is there a clear CTA (book a 20-minute demo, link to automotive.salesteq.com)?
 5. Spelling, grammar, professionalism?
 6. Is the email 150-250 words (not too long, not too short)?
+7. Cold outreach best practices: strong opening line, specific pain point, social proof (NAGHI), clear next step. No fluff.
+8. Would a CEO of a European dealer group actually read this and reply?
 
 Company: ${COMPANY}
 Subject: ${SUBJECT}
@@ -180,6 +184,61 @@ Respond with:
       echo "$LINE_HASH" >> "$REVIEWED_TRACKER"
     done
     LAST_ASSETS_COUNT=$ASSETS_COUNT
+  fi
+
+  # Check if landing page changed
+  if [ -f "$LANDING_PAGE" ]; then
+    LANDING_HASH=$(md5sum "$LANDING_PAGE" 2>/dev/null | cut -d' ' -f1)
+    if [ "$LANDING_HASH" != "$LAST_LANDING_HASH" ]; then
+      LAST_LANDING_HASH="$LANDING_HASH"
+
+      echo ""
+      echo "═══════════════════════════════════════════════════"
+      echo "[$(date '+%H:%M:%S')] Reviewing landing page: automotive.salesteq.com/landing/"
+      echo "═══════════════════════════════════════════════════"
+
+      LANDING_CONTENT=$(head -c 2000 "$LANDING_PAGE")
+
+      PROMPT="You are a QA reviewer for the Salesteq automotive landing page at automotive.salesteq.com/landing/.
+
+Review this landing page HTML. Be CONCISE — max 5 bullet points.
+
+Check for:
+1. Does it reference NAGHI Motors accurately? (11+ brands, 250K vehicles/year, BMW exclusive dealer Saudi Arabia)
+2. Is it professional and compelling for European automotive dealer group executives?
+3. Clear value proposition and CTA (book a demo)?
+4. No buzzwords, no typos, proper formatting?
+5. Does it represent Salesteq products correctly?
+
+HTML (first 2000 chars):
+${LANDING_CONTENT}
+
+Respond with:
+- VERDICT: PASS or NEEDS_ATTENTION
+- Bullet points of findings
+- Keep it under 150 words"
+
+      REVIEW=$(echo "$PROMPT" | "$CLAUDE" -p --model "$MODEL" --no-session-persistence --max-budget-usd 0.05 2>/dev/null)
+
+      if [ -n "$REVIEW" ]; then
+        VERDICT="PASS"
+        echo "$REVIEW" | grep -qi "NEEDS_ATTENTION" && VERDICT="NEEDS_ATTENTION"
+
+        echo ""
+        echo "$REVIEW"
+        echo ""
+
+        if [ "$VERDICT" = "PASS" ]; then
+          echo "  PASS — Landing page"
+        else
+          echo "  NEEDS ATTENTION — Landing page"
+        fi
+
+        TS=$(date +%s)
+        REVIEW_ESC=$(echo "$REVIEW" | tr '\n' '|' | sed 's/"/\\"/g' | head -c 2000)
+        echo "{\"ts\":${TS},\"type\":\"landing-page\",\"company\":\"automotive.salesteq.com\",\"verdict\":\"${VERDICT}\",\"review\":\"${REVIEW_ESC}\"}" >> "$QA_LOG"
+      fi
+    fi
   fi
 
   sleep 5

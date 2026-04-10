@@ -106,8 +106,65 @@ app.get("/api/status", (_req, res) => {
 });
 
 app.get("/api/stream", (_req, res) => {
-  const commits = getGitCommits();
-  res.json({ commits, events: [] });
+  const events: any[] = [];
+  const prospects = readJsonl("prospects.jsonl");
+  const drafts = readJsonl("outreach-draft.jsonl");
+  const approved = readJsonl("outreach-approved.jsonl");
+  const assets = readJsonl("assets.jsonl");
+  const qa = readJsonl("qa-reviews.jsonl");
+
+  for (const p of prospects) {
+    events.push({
+      type: "prospect",
+      agent: p.addedBy || "operator",
+      text: "Researched " + (p.company || "prospect") + " (" + (p.country || "") + ")",
+      ts: p.timestamp || "",
+    });
+  }
+  for (const d of drafts) {
+    events.push({
+      type: "outreach",
+      agent: d.createdBy || "operator",
+      text: "Drafted email to " + (d.company || "prospect"),
+      ts: d.timestamp || "",
+    });
+  }
+  for (const a of approved) {
+    if (a.status === "sent") {
+      events.push({
+        type: "sent",
+        agent: "manager",
+        text: "Sent email to " + (a.company || "prospect"),
+        ts: a.timestamp || "",
+      });
+    }
+  }
+  for (const a of assets) {
+    events.push({
+      type: "asset",
+      agent: a.createdBy || "operator",
+      text: "Created " + (a.type || "asset") + ": " + (a.title || ""),
+      ts: a.timestamp || "",
+    });
+  }
+  for (const q of qa) {
+    const target = q.company || q.title || "item";
+    const icon = q.verdict === "PASS" ? "Approved" : "Flagged";
+    events.push({
+      type: "qa",
+      agent: "qa",
+      text: icon + " " + (q.type || "") + " — " + target,
+      ts: q.ts ? new Date(q.ts * 1000).toISOString() : "",
+    });
+  }
+
+  events.sort((a: any, b: any) => {
+    const ta = a.ts ? new Date(a.ts).getTime() : 0;
+    const tb = b.ts ? new Date(b.ts).getTime() : 0;
+    return tb - ta;
+  });
+
+  res.json({ events: events.slice(0, 50) });
 });
 
 app.get("/api/leads", (_req, res) => {
@@ -416,55 +473,23 @@ a:hover{text-decoration:underline}
 /* =========================================
    IMPACT
    ========================================= */
-.impact-page{max-width:800px;margin:0 auto;padding:20px 0}
+.impact-page{max-width:640px;margin:0 auto;padding:40px 0;display:flex;flex-direction:column;align-items:center;height:calc(100vh - 102px);justify-content:center}
 
 .impact-hero{text-align:center;margin-bottom:48px}
-.impact-time{
-  font-size:120px;font-weight:700;color:#fff;letter-spacing:-6px;line-height:1;
-  font-family:var(--mono);
-  background:linear-gradient(135deg,var(--accent),#ff6b2b);
-  -webkit-background-clip:text;-webkit-text-fill-color:transparent;
-}
-.impact-time-label{font-size:16px;color:var(--text2);margin-top:8px;letter-spacing:-.3px}
+.impact-big{font-size:140px;font-weight:700;color:#fff;letter-spacing:-8px;line-height:1;font-family:var(--mono)}
+.impact-unit{font-size:48px;font-weight:300;color:var(--text3);letter-spacing:-2px;margin-left:4px}
+.impact-sub{font-size:15px;color:var(--text3);margin-top:12px;letter-spacing:-.2px}
 
-.impact-vs{margin-bottom:48px}
-.impact-vs-label{font-size:12px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin-bottom:16px}
-.impact-bar-container{display:flex;flex-direction:column;gap:8px}
-.impact-bar-track{background:#141414;border-radius:8px;height:48px;overflow:hidden;position:relative}
-.impact-bar{
-  height:100%;border-radius:8px;display:flex;align-items:center;justify-content:space-between;
-  padding:0 16px;min-width:60px;transition:width 1.5s cubic-bezier(.16,1,.3,1);
-}
-.ai-bar{background:linear-gradient(90deg,var(--accent),#ff6b2b)}
-.human-bar{background:linear-gradient(90deg,#333,#555)}
-.bar-label{font-size:12px;font-weight:600;color:#fff;white-space:nowrap}
-.bar-value{font-size:12px;font-weight:700;color:#fff;font-family:var(--mono);white-space:nowrap}
+.impact-compare{width:100%;margin-bottom:48px;display:flex;align-items:flex-end;gap:24px;justify-content:center;height:120px}
+.impact-col{display:flex;flex-direction:column;align-items:center;gap:8px}
+.impact-col-bar{width:80px;border-radius:6px 6px 0 0;transition:height 1.5s cubic-bezier(.16,1,.3,1)}
+.impact-col-label{font-size:11px;color:var(--text3);letter-spacing:.3px}
+.impact-col-val{font-size:14px;font-weight:600;color:#fff;font-family:var(--mono)}
 
-.impact-grid{
-  display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:48px;
-}
-.impact-card{
-  background:var(--card);border:1px solid var(--border);border-radius:12px;
-  padding:20px;text-align:center;
-}
-.impact-num{font-size:36px;font-weight:700;color:#fff;font-family:var(--mono);letter-spacing:-2px;line-height:1}
-.impact-label{font-size:11px;color:var(--text3);margin-top:8px;text-transform:uppercase;letter-spacing:.5px}
-.impact-human{font-size:11px;color:var(--text3);margin-top:6px;font-style:italic}
-
-.impact-team{margin-top:12px}
-.impact-team-title{font-size:12px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin-bottom:16px}
-.impact-roster{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}
-.roster-card{
-  background:var(--card);border:1px solid var(--border);border-radius:10px;
-  padding:14px;text-align:center;
-}
-.roster-avatar{
-  width:36px;height:36px;border-radius:50%;margin:0 auto 8px;
-  display:flex;align-items:center;justify-content:center;
-  font-size:14px;font-weight:700;color:#fff;
-}
-.roster-name{font-size:12px;font-weight:600;color:var(--text)}
-.roster-role{font-size:10px;color:var(--text3);margin-top:2px}
+.impact-row{width:100%;display:flex;justify-content:center;gap:48px}
+.impact-stat{text-align:center}
+.impact-stat-num{font-size:32px;font-weight:600;color:#fff;font-family:var(--mono);letter-spacing:-1px}
+.impact-stat-label{font-size:11px;color:var(--text3);margin-top:4px}
 
 /* Empty state */
 .empty-state{text-align:center;padding:60px 24px;color:var(--text3);font-size:13px;letter-spacing:.2px}
@@ -541,34 +566,13 @@ a:hover{text-decoration:underline}
     <div class="impact-page">
 
       <div class="impact-hero">
-        <div class="impact-time" id="impact-time">0</div>
-        <div class="impact-time-label">minutes of AI team work</div>
+        <div><span class="impact-big" id="impact-time">0</span><span class="impact-unit">min</span></div>
+        <div class="impact-sub" id="impact-sub"></div>
       </div>
 
-      <div class="impact-vs">
-        <div class="impact-vs-label">Equivalent human effort</div>
-        <div class="impact-bar-container">
-          <div class="impact-bar-track">
-            <div class="impact-bar ai-bar" id="ai-bar" style="width:0%">
-              <span class="bar-label">AI Team</span>
-              <span class="bar-value" id="ai-bar-val"></span>
-            </div>
-          </div>
-          <div class="impact-bar-track">
-            <div class="impact-bar human-bar" id="human-bar" style="width:0%">
-              <span class="bar-label">Human Team</span>
-              <span class="bar-value" id="human-bar-val"></span>
-            </div>
-          </div>
-        </div>
-      </div>
+      <div class="impact-compare" id="impact-compare"></div>
 
-      <div class="impact-grid" id="impact-grid"></div>
-
-      <div class="impact-team">
-        <div class="impact-team-title">The Team</div>
-        <div class="impact-roster" id="impact-roster"></div>
-      </div>
+      <div class="impact-row" id="impact-row"></div>
 
     </div>
   </div>
@@ -693,20 +697,29 @@ a:hover{text-decoration:underline}
     grid.innerHTML = html;
   }
 
+  var AGENT_COLORS={'operator-1':'#3b82f6','operator-2':'#22c55e','operator-3':'#8b5cf6','operator':'#3b82f6','qa':'#06b6d4','manager':'#e8720c'};
+  var EVENT_ICONS={prospect:'\\u{1F50D}',outreach:'\\u{2709}',sent:'\\u{1F680}',asset:'\\u{1F4C4}',qa:'\\u{2705}'};
+
   function renderStream(data){
     var el = document.getElementById('activity-stream');
-    var commits = data.commits||[];
-    if(!commits.length){
+    var events = data.events||[];
+    if(!events.length){
       el.innerHTML='<div class="empty-state">Waiting for activity...</div>';
       return;
     }
     var html='';
-    for(var i=0;i<commits.length;i++){
-      var c=commits[i];
+    for(var i=0;i<events.length;i++){
+      var e=events[i];
+      var color=AGENT_COLORS[e.agent]||'#888';
+      var icon=EVENT_ICONS[e.type]||'\\u{26A1}';
+      var agentName=(e.agent||'').replace('-',' ');
+      agentName=agentName.charAt(0).toUpperCase()+agentName.slice(1);
       html+='<div class="commit-item">'+
-        '<span class="commit-hash">'+esc(c.hash)+'</span>'+
-        '<div class="commit-msg">'+esc(c.message)+'</div>'+
-        '<div class="commit-meta">'+esc(c.author)+' \\u00b7 '+esc(c.relative)+'</div>'+
+        '<div style="display:flex;align-items:center;gap:8px">'+
+          '<span style="font-size:13px">'+icon+'</span>'+
+          '<span style="font-size:11px;font-weight:600;color:'+color+'">'+esc(agentName)+'</span>'+
+        '</div>'+
+        '<div class="commit-msg">'+esc(e.text)+'</div>'+
       '</div>';
     }
     el.innerHTML=html;
@@ -869,80 +882,51 @@ a:hover{text-decoration:underline}
   }
 
   // ========== RENDER: Impact ==========
+  var impactAnimated=false;
   function renderImpact(d){
-    // Calculate AI time in minutes
     var aiMinutes=15;
-    if(d.startTime){
-      var elapsed=Math.round((Date.now()-new Date(d.startTime).getTime())/60000);
-      if(elapsed>0&&elapsed<600)aiMinutes=elapsed;
+    var humanHrs=Math.round(d.prospects*0.5 + d.emails*1.0 + d.qaReviews*0.25 + d.assets*2.0);
+    if(!humanHrs)humanHrs=1;
+
+    // Animate big number once
+    if(!impactAnimated){
+      impactAnimated=true;
+      var el=document.getElementById('impact-time');
+      var c=0;
+      var iv=setInterval(function(){c++;el.textContent=c;if(c>=aiMinutes)clearInterval(iv)},60);
     }
 
-    // Human equivalents (conservative estimates)
-    var humanProspectHrs=d.prospects*0.5;   // 30min research per prospect
-    var humanEmailHrs=d.emails*1.0;         // 1hr per personalized email
-    var humanQaHrs=d.qaReviews*0.25;        // 15min per QA review
-    var humanAssetHrs=d.assets*2.0;         // 2hrs per marketing asset
-    var humanTotalHrs=Math.round(humanProspectHrs+humanEmailHrs+humanQaHrs+humanAssetHrs);
-    var aiHrs=Math.round(aiMinutes/60*10)/10;
+    // Subtitle
+    document.getElementById('impact-sub').textContent='5 AI agents. '+d.prospects+' prospects. '+d.emails+' emails. '+humanHrs+' hours of human work.';
 
-    // Animate the big number
-    var timeEl=document.getElementById('impact-time');
-    var current=parseInt(timeEl.textContent)||0;
-    if(current!==aiMinutes){
-      var step=current<aiMinutes?1:-1;
-      var iv=setInterval(function(){
-        current+=step;
-        timeEl.textContent=current;
-        if(current===aiMinutes)clearInterval(iv);
-      },30);
-    }
-
-    // Bars — AI is always the short one, human is the long one
-    var maxHrs=Math.max(humanTotalHrs,1);
-    setTimeout(function(){
-      var aiPct=Math.max(3,Math.round(aiHrs/maxHrs*100));
-      var humanPct=100;
-      document.getElementById('ai-bar').style.width=aiPct+'%';
-      document.getElementById('human-bar').style.width=humanPct+'%';
-      document.getElementById('ai-bar-val').textContent=aiHrs+' hrs';
-      document.getElementById('human-bar-val').textContent=humanTotalHrs+' hrs';
-    },200);
-
-    // Metric cards
-    var cards=[
-      {n:d.prospects,l:'Prospects',h:Math.round(humanProspectHrs)+'h human work'},
-      {n:d.emails,l:'Emails Written',h:Math.round(humanEmailHrs)+'h human work'},
-      {n:d.qaReviews,l:'QA Reviews',h:Math.round(humanQaHrs)+'h human work'},
-      {n:d.commits,l:'Deployments',h:'Continuous delivery'},
-    ];
-    var gHtml='';
-    for(var i=0;i<cards.length;i++){
-      gHtml+='<div class="impact-card">'+
-        '<div class="impact-num">'+cards[i].n+'</div>'+
-        '<div class="impact-label">'+cards[i].l+'</div>'+
-        '<div class="impact-human">'+cards[i].h+'</div>'+
+    // Two bars — AI tiny, Human massive
+    var maxH=Math.max(humanHrs,1);
+    var aiH=Math.max(4,Math.round(aiMinutes/60/maxH*110));
+    var humanH=110;
+    document.getElementById('impact-compare').innerHTML=
+      '<div class="impact-col">'+
+        '<div class="impact-col-val">'+aiMinutes+' min</div>'+
+        '<div class="impact-col-bar" style="height:'+aiH+'px;background:#fff"></div>'+
+        '<div class="impact-col-label">AI Team</div>'+
+      '</div>'+
+      '<div class="impact-col">'+
+        '<div class="impact-col-val">'+humanHrs+' hrs</div>'+
+        '<div class="impact-col-bar" style="height:'+humanH+'px;background:#333"></div>'+
+        '<div class="impact-col-label">Human Team</div>'+
       '</div>';
-    }
-    document.getElementById('impact-grid').innerHTML=gHtml;
 
-    // Team roster
-    var roster=[
-      {name:'Manager',role:'Strategy + Coordination',color:'#e8720c',init:'M'},
-      {name:'Operator 1',role:'Research + Outreach',color:'#3b82f6',init:'1'},
-      {name:'Operator 2',role:'Research + Outreach',color:'#22c55e',init:'2'},
-      {name:'Operator 3',role:'Research + Outreach',color:'#8b5cf6',init:'3'},
-      {name:'QA',role:'Quality Assurance',color:'#06b6d4',init:'Q'},
+    // Stats row
+    var stats=[
+      {n:d.prospects,l:'Prospects'},
+      {n:d.emails,l:'Emails'},
+      {n:d.qaReviews,l:'QA Reviews'},
+      {n:d.countries,l:'Countries'},
     ];
-    var rHtml='';
-    for(var i=0;i<roster.length;i++){
-      var r=roster[i];
-      rHtml+='<div class="roster-card">'+
-        '<div class="roster-avatar" style="background:'+r.color+'">'+r.init+'</div>'+
-        '<div class="roster-name">'+r.name+'</div>'+
-        '<div class="roster-role">'+r.role+'</div>'+
-      '</div>';
+    var h='';
+    for(var i=0;i<stats.length;i++){
+      h+='<div class="impact-stat"><div class="impact-stat-num">'+stats[i].n+'</div><div class="impact-stat-label">'+stats[i].l+'</div></div>';
     }
-    document.getElementById('impact-roster').innerHTML=rHtml;
+    document.getElementById('impact-row').innerHTML=h;
   }
 
   // ========== DATA FETCHING ==========
@@ -953,9 +937,10 @@ a:hover{text-decoration:underline}
       fetch('/api/leads').then(function(r){return r.json()}),
       fetch('/api/outreach').then(function(r){return r.json()}),
       fetch('/api/assets').then(function(r){return r.json()}),
-      fetch('/api/qa').then(function(r){return r.json()})
+      fetch('/api/qa').then(function(r){return r.json()}),
+      fetch('/api/impact').then(function(r){return r.json()})
     ]).then(function(results){
-      var status=results[0],stream=results[1],leads=results[2],outreach=results[3],assets=results[4],qa=results[5];
+      var status=results[0],stream=results[1],leads=results[2],outreach=results[3],assets=results[4],qa=results[5],impact=results[6];
 
       // Badges
       document.getElementById('badge-leads').textContent=status.counts.leads;
@@ -970,6 +955,7 @@ a:hover{text-decoration:underline}
       renderOutreach(outreach);
       renderAssets(assets);
       renderQA(qa);
+      renderImpact(impact);
     }).catch(function(e){
       console.error('Dashboard fetch error:',e);
     });
@@ -993,11 +979,12 @@ app.post("/api/admin/kill-agents", (_req, res) => {
 
 app.post("/api/admin/wipe-data", (_req, res) => {
   try {
-    execSync(`rm -f ${DATA_DIR}/*.jsonl ${DATA_DIR}/.qa-reviewed 2>/dev/null; mkdir -p ${DATA_DIR}`, { stdio: "pipe" });
+    execSync(`rm -f ${DATA_DIR}/*.jsonl ${DATA_DIR}/.qa-reviewed ${DATA_DIR}/*.pdf 2>/dev/null; mkdir -p ${DATA_DIR}`, { stdio: "pipe" });
     try { execSync(`cp /root/commercial-ops/data/seed-prospects.jsonl ${DATA_DIR}/prospects.jsonl 2>/dev/null`, { stdio: "pipe" }); } catch {}
     execSync(`touch ${DATA_DIR}/outreach-draft.jsonl ${DATA_DIR}/outreach-approved.jsonl ${DATA_DIR}/assets.jsonl ${DATA_DIR}/qa-reviews.jsonl ${DATA_DIR}/qa-feedback.jsonl`, { stdio: "pipe" });
     try { execSync(`cd /root/commercial-ops && git checkout -- STATUS.md 2>/dev/null`, { stdio: "pipe" }); } catch {}
-    res.json({ ok: true, message: "Data wiped, prospects re-seeded" });
+    try { execSync(`rm -rf /root/commercial-ops/landing/index.html /tmp/onepager-*.pdf 2>/dev/null`, { stdio: "pipe" }); } catch {}
+    res.json({ ok: true, message: "Data wiped, landing page removed, prospects re-seeded" });
   } catch (e) { res.json({ ok: false, error: String(e) }); }
 });
 

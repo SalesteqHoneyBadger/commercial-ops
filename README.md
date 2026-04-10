@@ -56,9 +56,43 @@ ssh -i ~/.ssh/id_experiment root@89.167.77.26 -t tmux -CC attach -t commercial-o
 
 Same pattern as the dev HoneyBadger team — identical agents, no specialization, no handoffs.
 
-## Control Panel
+## Dashboard
 
-`https://automotive.salesteq.com` — shows agent status, prospects, outreach emails, QA reviews, activity stream.
+`https://automotive.salesteq.com` — live dashboard with tabs:
+- **Mission Control** — agent status, KITT scanner animations, activity stream
+- **Leads** — prospect pipeline by country
+- **Outreach** — draft and approved emails
+- **Assets** — marketing content
+- **QA** — review verdicts
+- **Impact** — AI vs human work comparison (the demo punchline)
+
+## Admin Panel
+
+`https://automotive.salesteq.com/admin` — clean control panel:
+- Launch / Kill agents
+- Wipe + Re-seed data (also deletes landing page and PDFs for clean restart)
+- Clear Claude sessions
+- Full Reset (all of the above)
+- Copy-to-clipboard terminal commands
+
+## Demo Flow (15 minutes)
+
+1. Hit **Full Reset** on admin panel
+2. Hit **Launch Agents** — or run `cd /root/commercial-ops && bash start-agents.sh`
+3. Connect iTerm2: `tmux -CC attach -t commercial-ops`
+4. Watch agents research prospects, write emails, build landing page, generate PDF one-pagers
+5. QA reviews everything — flags issues, operators fix them
+6. Approved emails get sent to viktor@salesteq.com with tailored PDF attached
+7. Show the **Impact** tab — 15 minutes of AI = 60+ hours of human work
+
+## Key Tools
+
+| Script | What It Does |
+|--------|-------------|
+| `start-agents.sh` | Creates tmux session, launches all 5 agents |
+| `qa-reviewer.sh` | Auto-reviews drafts, assets, and landing page via Claude Haiku |
+| `generate-onepager.py` | Creates tailored PDF one-pager for a prospect |
+| `send-test-email.sh` | Sends styled HTML email + PDF to viktor@salesteq.com (test mode) |
 
 ## iTerm2 Tabs
 
