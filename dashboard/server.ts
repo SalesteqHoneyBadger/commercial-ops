@@ -67,7 +67,7 @@ function getAgentStatuses() {
 function getGitCommits(): any[] {
   try {
     const out = execSync(
-      `cd ${DATA_DIR} && git log --oneline --format='%H|||%s|||%an|||%ar' -20 2>/dev/null`,
+      `cd /root/commercial-ops && git log --oneline --format='%H|||%s|||%an|||%ar' -20 2>/dev/null`,
       { timeout: 3000, encoding: "utf-8" }
     );
     return out
@@ -954,6 +954,13 @@ loadStats();
 </script></body></html>`);
 });
 
+// Serve automotive landing page
+app.get('/automotive', (req, res) => {
+  const landingPath = path.join(__dirname, '../landing/index.html');
+  res.sendFile(landingPath);
+});
+
 app.listen(PORT, () => {
   console.log(`Commercial Ops Dashboard running at http://localhost:${PORT}`);
+  console.log(`Automotive landing page at http://localhost:${PORT}/automotive`);
 });
