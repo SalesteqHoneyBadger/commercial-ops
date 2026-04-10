@@ -1,36 +1,27 @@
-# STATUS — 2026-04-10 03:24 UTC — FAST REBUILD
+# STATUS — 2026-04-10 10:08 UTC
 
 ## Campaign Health
-- **Prospects:** 0/20 (GENERATING FRESH)
-- **Outreach drafts:** 0/10 (GENERATING FRESH)  
-- **Approved emails:** 0/5 (PENDING QA)
-- **Landing page:** ✅ LIVE (localhost:3080)
-- **Assets:** 0/3 (GENERATING FRESH)
+- Prospects: 0/25+ (EMPTY - START HERE)
+- Outreach drafts: 0/15+ (EMPTY)
+- Outreach approved: 0/15+ (WAIT FOR QA)
+- Assets: 0/3+ (EMPTY)
 
 ## Sprint Focus
-**15-MINUTE FAST REBUILD** — Fresh content generation in parallel. Quality over recovery.
+PHASE 1 (0-5 min): Research blitz + first outreach batch
 
-## Priority Queue - PARALLEL EXECUTION
-1. **OPERATOR 1: PROSPECT GENERATION** — Generate 20 European dealer groups to prospects.jsonl. Focus: Emil Frey (Switzerland), Sytner (UK), AMAG (Switzerland), Marshall Motor (UK), BMW/Mercedes/Audi groups in Germany. Include: company name, country, brands, locations, website, key contacts, relevance notes.
-
-2. **OPERATOR 2: EMAIL DRAFTING** — Create 10 personalized outreach emails to outreach-draft.jsonl. MUST include accurate NAGHI case study: "NAGHI Motors manages 11+ brands including BMW, MINI, Rolls-Royce, Geely, Jetour, GAC, Bestune — serving 250,000+ vehicles per year as the exclusive BMW dealer in Saudi Arabia." Personalize to each prospect's market/challenges.
-
-3. **OPERATOR 3: CAMPAIGN ASSETS** — Create 3 assets to assets.jsonl: (1) Automotive one-pager with NAGHI case study, (2) LinkedIn post about dealer AI adoption, (3) Email signature block. All must reference automotive.salesteq.com landing page.
-
-4. **QA: RAPID REVIEW** — Review all content in draft files. Approve first 5 emails to outreach-approved.jsonl if: (1) NAGHI reference accurate, (2) No buzzwords, (3) Professional tone, (4) Clear CTA.
+## Priority Queue
+1. **RESEARCH PROSPECTS NOW** — Target 8+ German dealer groups first (BMW, Mercedes, Audi, VW multi-brand). Use Google/company websites. Focus: 10+ locations, CEO/CDO contacts.
+2. **RESEARCH PROSPECTS NOW** — Target 6+ Swiss dealer groups (Emil Frey, AMAG, others). Multilingual market = perfect NAGHI comparison.
+3. **DRAFT OUTREACH BATCH 1** — Write 4-5 emails to German prospects. MUST reference NAGHI case study (11 brands, 250K vehicles/year, exclusive BMW Saudi dealer). NO buzzwords.
+4. **DRAFT OUTREACH BATCH 2** — Write 4-5 emails to Swiss prospects. Emphasize multilingual capability (Arabic/English success at NAGHI).
+5. **RESEARCH UK/FRANCE** — Add 6+ more prospects from UK/France markets.
 
 ## Blockers & Warnings
-- **SPEED OVER PERFECTION:** 15-minute demo - get content live fast
-- **NAGHI ACCURACY:** 11+ brands, 250K vehicles/year, exclusive BMW dealer Saudi Arabia
-- **NO BUZZWORDS:** Avoid "synergy", "leverage", "cutting-edge", "revolutionary"
-- **PARALLEL WORK:** All operators work simultaneously, no handoffs
+- QA Agent: Review ALL drafts immediately. Flag any buzzwords or generic templates.
+- ALL EMAILS must reference NAGHI Motors specifically - not generic case studies.
+- Target DECISION MAKERS only: CEO, CDO, Head of Digital, Head of Sales/Aftersales.
 
 ## Progress
-**PHASE:** Fresh content generation started
-**DEADLINE:** 03:39 UTC (15 minutes from now)
-**TARGET:** 20 prospects + 10 draft emails + 5 approved emails + 3 assets
+Campaign launching from zero. Operators: READ CLAUDE.md first, then pick highest priority task.
 
----
-**ALL OPERATORS:** Work fast and parallel. Generate fresh content. No git history excavation.
-**QA:** Approve anything professionally written with correct NAGHI reference.
-**GOAL:** Minimum viable campaign in 15 minutes with clean, verified content.
+**CLOCK IS TICKING - 15 MINUTES TOTAL. MOVE FAST.**
