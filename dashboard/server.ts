@@ -837,37 +837,119 @@ app.get("/api/admin/stats", (_req, res) => {
 
 app.get("/admin", (_req, res) => {
   res.send(`<!DOCTYPE html>
-<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Demo Admin</title>
+<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Admin</title>
 <style>
-*{margin:0;padding:0;box-sizing:border-box}body{font-family:-apple-system,BlinkMacSystemFont,'SF Pro',sans-serif;background:#111;color:#ccc;padding:40px}
-h1{font-size:20px;color:#e8720c;margin-bottom:30px}.section{margin-bottom:30px}.section h2{font-size:13px;color:#666;text-transform:uppercase;letter-spacing:1px;margin-bottom:12px}
-.btn-row{display:flex;gap:10px;flex-wrap:wrap}.btn{padding:12px 24px;border:1px solid #333;border-radius:8px;background:#1a1a1a;color:#ccc;font-size:13px;font-weight:600;cursor:pointer;transition:all 0.15s}
-.btn:hover{border-color:#555;background:#222}.btn.danger{border-color:#a33;color:#e55}.btn.danger:hover{background:#2a1515;border-color:#c44}
-.btn.success{border-color:#3a3;color:#5c5}.btn.success:hover{background:#152a15;border-color:#4c4}.btn.warn{border-color:#a83;color:#da5}.btn.warn:hover{background:#2a2515;border-color:#cb4}
-.status-box{background:#1a1a1a;border:1px solid #252525;border-radius:8px;padding:16px;font-family:'SF Mono',monospace;font-size:11px;line-height:1.6;color:#777;white-space:pre-wrap;max-height:200px;overflow-y:auto;margin-top:12px}
-.log{margin-top:12px;color:#555;font-size:12px;font-style:italic}.links{margin-top:30px}.links a{color:#e8720c;text-decoration:none;margin-right:20px;font-size:13px}.links a:hover{color:#f90}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%;background:#000;color:#e0e0e0;font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display','Helvetica Neue',sans-serif;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;overflow:hidden}
+::selection{background:rgba(255,255,255,.15)}
+::-webkit-scrollbar{width:0;height:0}
+
+.page{max-width:600px;margin:0 auto;padding:40px 32px 24px;height:100vh;display:flex;flex-direction:column;justify-content:center}
+
+h1{font-size:36px;font-weight:600;color:#fff;letter-spacing:-1.2px;margin-bottom:2px}
+.sub{font-size:14px;font-weight:400;color:#555;margin-bottom:36px;letter-spacing:-.2px}
+
+.section{margin-bottom:24px}
+.label{font-size:13px;font-weight:500;color:#555;letter-spacing:-.1px;margin-bottom:10px}
+
+.row{display:flex;gap:10px;flex-wrap:wrap}
+.btn{
+  padding:11px 22px;font-size:14px;font-weight:500;color:#fff;letter-spacing:-.2px;
+  background:#161616;border:none;border-radius:10px;
+  cursor:pointer;transition:all .15s ease;font-family:inherit;
+}
+.btn:hover{background:#222}
+.btn:active{transform:scale(.97);background:#1a1a1a}
+.btn.red{color:#ff453a}
+.btn.red:hover{background:#1a0f0e}
+
+.terminal{
+  margin-top:4px;padding:14px 18px;background:#111;border-radius:10px;
+  font-family:'SF Mono','Menlo','Consolas',monospace;font-size:13px;color:#aaa;
+  cursor:pointer;transition:all .15s;line-height:1.5;word-break:break-all;
+}
+.terminal:hover{background:#161616;color:#fff}
+.terminal:active{transform:scale(.995)}
+
+.stats{
+  margin-top:4px;padding:14px;background:#111;border-radius:10px;
+  font-family:'SF Mono','Menlo',monospace;font-size:11px;line-height:1.6;
+  color:#666;white-space:pre-wrap;max-height:140px;overflow-y:auto;
+}
+.stats-header{display:flex;align-items:center;justify-content:space-between}
+.stats-refresh{font-size:13px;color:#555;background:none;border:none;cursor:pointer;font-family:inherit;transition:color .15s}
+.stats-refresh:hover{color:#fff}
+
+.toast{
+  position:fixed;bottom:40px;left:50%;transform:translateX(-50%) translateY(16px);
+  background:#1a1a1a;color:#fff;font-size:13px;font-weight:500;padding:12px 28px;border-radius:12px;
+  opacity:0;transition:all .25s ease;pointer-events:none;letter-spacing:-.2px;
+}
+.toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+
+.foot{margin-top:28px;display:flex;gap:20px}
+.foot a{font-size:13px;color:#333;text-decoration:none;transition:color .15s}
+.foot a:hover{color:#aaa}
 </style></head><body>
-<h1>Demo Admin</h1>
-<div class="section"><h2>Agent Control</h2><div class="btn-row">
-<button class="btn success" onclick="api('/api/admin/launch-agents','POST')">Launch Agents</button>
-<button class="btn danger" onclick="api('/api/admin/kill-agents','POST')">Kill All Agents</button>
-</div></div>
-<div class="section"><h2>Data Management</h2><div class="btn-row">
-<button class="btn warn" onclick="api('/api/admin/wipe-data','POST')">Wipe Demo Data (re-seed prospects)</button>
-<button class="btn warn" onclick="api('/api/admin/clear-sessions','POST')">Clear Claude Sessions</button>
-</div></div>
-<div class="section"><h2>Full Reset</h2><div class="btn-row">
-<button class="btn danger" onclick="fullReset()">Full Reset: Kill + Wipe + Clear Sessions</button>
-</div></div>
-<div class="section"><h2>Server Status</h2><button class="btn" onclick="loadStats()">Refresh</button>
-<div class="status-box" id="statsBox">Click refresh...</div></div>
-<div id="logArea" class="log"></div>
-<div class="links"><a href="/">Dashboard</a><a href="https://github.com/SalesteqHoneyBadger/commercial-ops" target="_blank">GitHub</a></div>
+
+<div class="page">
+  <h1>Admin</h1>
+  <div class="sub">Commercial Ops</div>
+
+  <div class="section">
+    <div class="label">Agents</div>
+    <div class="row">
+      <button class="btn" onclick="api('/api/admin/launch-agents','POST')">Launch</button>
+      <button class="btn red" onclick="api('/api/admin/kill-agents','POST')">Kill All</button>
+      <button class="btn red" onclick="fullReset()">Full Reset</button>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="label">Data</div>
+    <div class="row">
+      <button class="btn" onclick="api('/api/admin/wipe-data','POST')">Wipe + Re-seed</button>
+      <button class="btn" onclick="api('/api/admin/clear-sessions','POST')">Clear Sessions</button>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="label">Launch from Mac</div>
+    <div class="terminal" onclick="copy(this)">ssh -i ~/.ssh/id_experiment root@89.167.77.26 -t 'cd /root/commercial-ops && bash start-agents.sh && tmux -CC attach -t commercial-ops'</div>
+  </div>
+
+  <div class="section">
+    <div class="label">Launch on server</div>
+    <div class="terminal" onclick="copy(this)">cd /root/commercial-ops && bash start-agents.sh</div>
+  </div>
+
+  <div class="section">
+    <div class="label">Open agent tabs in iTerm2</div>
+    <div class="terminal" onclick="copy(this)">tmux -CC attach -t commercial-ops</div>
+  </div>
+
+  <div class="section">
+    <div class="stats-header">
+      <div class="label" style="margin-bottom:0">Status</div>
+      <button class="stats-refresh" onclick="loadStats()">Refresh</button>
+    </div>
+    <div class="stats" id="statsBox">Loading...</div>
+  </div>
+
+  <div class="foot">
+    <a href="/">Dashboard</a>
+    <a href="https://github.com/SalesteqHoneyBadger/commercial-ops" target="_blank">GitHub</a>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
 <script>
-function log(m){document.getElementById('logArea').textContent=new Date().toLocaleTimeString()+' - '+m}
-async function api(u,m){log('Sending...');try{var r=await fetch(u,{method:m||'GET'});var d=await r.json();log(d.message||JSON.stringify(d))}catch(e){log('Error: '+e.message)}}
-async function fullReset(){if(!confirm('Kill all agents, wipe all data, clear sessions?'))return;log('Killing agents...');await fetch('/api/admin/kill-agents',{method:'POST'});log('Wiping data...');await fetch('/api/admin/wipe-data',{method:'POST'});log('Clearing sessions...');await fetch('/api/admin/clear-sessions',{method:'POST'});log('Full reset complete.')}
-async function loadStats(){try{var r=await fetch('/api/admin/stats');var d=await r.json();document.getElementById('statsBox').textContent='MEMORY:\\n'+d.mem+'\\n\\nLOAD:\\n'+d.load+'\\n\\nTMUX:\\n'+d.tmux+'\\n\\nDATA:\\n'+d.dataFiles}catch(e){document.getElementById('statsBox').textContent='Error: '+e.message}}
+function toast(m){var t=document.getElementById('toast');t.textContent=m;t.classList.add('show');setTimeout(function(){t.classList.remove('show')},1800)}
+function copy(el){navigator.clipboard.writeText(el.textContent).then(function(){toast('Copied')}).catch(function(){toast('Copy failed')})}
+async function api(u,m){toast('Sending...');try{var r=await fetch(u,{method:m||'GET'});var d=await r.json();toast(d.message||JSON.stringify(d))}catch(e){toast('Error: '+e.message)}}
+async function fullReset(){if(!confirm('Kill all agents, wipe data, clear sessions?'))return;toast('Resetting...');await fetch('/api/admin/kill-agents',{method:'POST'});await fetch('/api/admin/wipe-data',{method:'POST'});await fetch('/api/admin/clear-sessions',{method:'POST'});toast('Reset complete')}
+async function loadStats(){try{var r=await fetch('/api/admin/stats');var d=await r.json();document.getElementById('statsBox').textContent=d.mem+'\\n\\n'+d.load+'\\n\\n'+d.tmux+'\\n\\n'+d.dataFiles}catch(e){document.getElementById('statsBox').textContent=e.message}}
 loadStats();
 </script></body></html>`);
 });
