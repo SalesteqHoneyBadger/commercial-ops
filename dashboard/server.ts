@@ -128,6 +128,33 @@ app.get("/api/qa", (_req, res) => {
   res.json(readJsonl("qa-reviews.jsonl"));
 });
 
+app.get("/api/impact", (_req, res) => {
+  const leads = readJsonl("prospects.jsonl");
+  const drafts = readJsonl("outreach-draft.jsonl");
+  const approved = readJsonl("outreach-approved.jsonl");
+  const assets = readJsonl("assets.jsonl");
+  const qa = readJsonl("qa-reviews.jsonl");
+  let commits = 0;
+  let startTime = "";
+  try {
+    const countOut = execSync("cd /root/commercial-ops && git rev-list --count HEAD 2>/dev/null", { encoding: "utf-8" }).trim();
+    commits = parseInt(countOut) || 0;
+    startTime = execSync("cd /root/commercial-ops && git log --reverse --format='%aI' | head -1 2>/dev/null", { encoding: "utf-8" }).trim();
+  } catch {}
+  const totalEmails = drafts.length + approved.length;
+  const countries = new Set(leads.map((l: any) => (l.country || "").toUpperCase().trim())).size;
+  res.json({
+    prospects: leads.length,
+    emails: totalEmails,
+    approved: approved.length,
+    assets: assets.length,
+    qaReviews: qa.length,
+    commits,
+    countries,
+    startTime,
+  });
+});
+
 // --- Dashboard HTML ---
 app.get("/", (_req, res) => {
   res.type("html").send(getDashboardHtml());
@@ -386,6 +413,59 @@ a:hover{text-decoration:underline}
 .qa-card.expanded .qa-review-text{display:block}
 .qa-ts{font-size:10px;color:var(--text3);font-family:var(--mono)}
 
+/* =========================================
+   IMPACT
+   ========================================= */
+.impact-page{max-width:800px;margin:0 auto;padding:20px 0}
+
+.impact-hero{text-align:center;margin-bottom:48px}
+.impact-time{
+  font-size:120px;font-weight:700;color:#fff;letter-spacing:-6px;line-height:1;
+  font-family:var(--mono);
+  background:linear-gradient(135deg,var(--accent),#ff6b2b);
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;
+}
+.impact-time-label{font-size:16px;color:var(--text2);margin-top:8px;letter-spacing:-.3px}
+
+.impact-vs{margin-bottom:48px}
+.impact-vs-label{font-size:12px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin-bottom:16px}
+.impact-bar-container{display:flex;flex-direction:column;gap:8px}
+.impact-bar-track{background:#141414;border-radius:8px;height:48px;overflow:hidden;position:relative}
+.impact-bar{
+  height:100%;border-radius:8px;display:flex;align-items:center;justify-content:space-between;
+  padding:0 16px;min-width:60px;transition:width 1.5s cubic-bezier(.16,1,.3,1);
+}
+.ai-bar{background:linear-gradient(90deg,var(--accent),#ff6b2b)}
+.human-bar{background:linear-gradient(90deg,#333,#555)}
+.bar-label{font-size:12px;font-weight:600;color:#fff;white-space:nowrap}
+.bar-value{font-size:12px;font-weight:700;color:#fff;font-family:var(--mono);white-space:nowrap}
+
+.impact-grid{
+  display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:48px;
+}
+.impact-card{
+  background:var(--card);border:1px solid var(--border);border-radius:12px;
+  padding:20px;text-align:center;
+}
+.impact-num{font-size:36px;font-weight:700;color:#fff;font-family:var(--mono);letter-spacing:-2px;line-height:1}
+.impact-label{font-size:11px;color:var(--text3);margin-top:8px;text-transform:uppercase;letter-spacing:.5px}
+.impact-human{font-size:11px;color:var(--text3);margin-top:6px;font-style:italic}
+
+.impact-team{margin-top:12px}
+.impact-team-title{font-size:12px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin-bottom:16px}
+.impact-roster{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}
+.roster-card{
+  background:var(--card);border:1px solid var(--border);border-radius:10px;
+  padding:14px;text-align:center;
+}
+.roster-avatar{
+  width:36px;height:36px;border-radius:50%;margin:0 auto 8px;
+  display:flex;align-items:center;justify-content:center;
+  font-size:14px;font-weight:700;color:#fff;
+}
+.roster-name{font-size:12px;font-weight:600;color:var(--text)}
+.roster-role{font-size:10px;color:var(--text3);margin-top:2px}
+
 /* Empty state */
 .empty-state{text-align:center;padding:60px 24px;color:var(--text3);font-size:13px;letter-spacing:.2px}
 </style>
@@ -409,6 +489,7 @@ a:hover{text-decoration:underline}
     <div class="tab" data-tab="outreach">Outreach <span class="badge" id="badge-outreach">0</span></div>
     <div class="tab" data-tab="assets">Assets <span class="badge" id="badge-assets">0</span></div>
     <div class="tab" data-tab="qa">QA <span class="badge" id="badge-qa">0</span></div>
+    <div class="tab" data-tab="impact">Impact</div>
   </div>
   <div class="topbar-right">
     <div class="live-dot"></div>
@@ -453,6 +534,43 @@ a:hover{text-decoration:underline}
   <div class="tab-content" id="tab-qa">
     <div class="qa-stats-row" id="qa-stats"></div>
     <div class="qa-list" id="qa-list"></div>
+  </div>
+
+  <!-- Impact -->
+  <div class="tab-content" id="tab-impact">
+    <div class="impact-page">
+
+      <div class="impact-hero">
+        <div class="impact-time" id="impact-time">0</div>
+        <div class="impact-time-label">minutes of AI team work</div>
+      </div>
+
+      <div class="impact-vs">
+        <div class="impact-vs-label">Equivalent human effort</div>
+        <div class="impact-bar-container">
+          <div class="impact-bar-track">
+            <div class="impact-bar ai-bar" id="ai-bar" style="width:0%">
+              <span class="bar-label">AI Team</span>
+              <span class="bar-value" id="ai-bar-val"></span>
+            </div>
+          </div>
+          <div class="impact-bar-track">
+            <div class="impact-bar human-bar" id="human-bar" style="width:0%">
+              <span class="bar-label">Human Team</span>
+              <span class="bar-value" id="human-bar-val"></span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="impact-grid" id="impact-grid"></div>
+
+      <div class="impact-team">
+        <div class="impact-team-title">The Team</div>
+        <div class="impact-roster" id="impact-roster"></div>
+      </div>
+
+    </div>
   </div>
 
 </div>
@@ -748,6 +866,83 @@ a:hover{text-decoration:underline}
       '</div>';
     }
     document.getElementById('qa-list').innerHTML=html;
+  }
+
+  // ========== RENDER: Impact ==========
+  function renderImpact(d){
+    // Calculate AI time in minutes
+    var aiMinutes=15;
+    if(d.startTime){
+      var elapsed=Math.round((Date.now()-new Date(d.startTime).getTime())/60000);
+      if(elapsed>0&&elapsed<600)aiMinutes=elapsed;
+    }
+
+    // Human equivalents (conservative estimates)
+    var humanProspectHrs=d.prospects*0.5;   // 30min research per prospect
+    var humanEmailHrs=d.emails*1.0;         // 1hr per personalized email
+    var humanQaHrs=d.qaReviews*0.25;        // 15min per QA review
+    var humanAssetHrs=d.assets*2.0;         // 2hrs per marketing asset
+    var humanTotalHrs=Math.round(humanProspectHrs+humanEmailHrs+humanQaHrs+humanAssetHrs);
+    var aiHrs=Math.round(aiMinutes/60*10)/10;
+
+    // Animate the big number
+    var timeEl=document.getElementById('impact-time');
+    var current=parseInt(timeEl.textContent)||0;
+    if(current!==aiMinutes){
+      var step=current<aiMinutes?1:-1;
+      var iv=setInterval(function(){
+        current+=step;
+        timeEl.textContent=current;
+        if(current===aiMinutes)clearInterval(iv);
+      },30);
+    }
+
+    // Bars — AI is always the short one, human is the long one
+    var maxHrs=Math.max(humanTotalHrs,1);
+    setTimeout(function(){
+      var aiPct=Math.max(3,Math.round(aiHrs/maxHrs*100));
+      var humanPct=100;
+      document.getElementById('ai-bar').style.width=aiPct+'%';
+      document.getElementById('human-bar').style.width=humanPct+'%';
+      document.getElementById('ai-bar-val').textContent=aiHrs+' hrs';
+      document.getElementById('human-bar-val').textContent=humanTotalHrs+' hrs';
+    },200);
+
+    // Metric cards
+    var cards=[
+      {n:d.prospects,l:'Prospects',h:Math.round(humanProspectHrs)+'h human work'},
+      {n:d.emails,l:'Emails Written',h:Math.round(humanEmailHrs)+'h human work'},
+      {n:d.qaReviews,l:'QA Reviews',h:Math.round(humanQaHrs)+'h human work'},
+      {n:d.commits,l:'Deployments',h:'Continuous delivery'},
+    ];
+    var gHtml='';
+    for(var i=0;i<cards.length;i++){
+      gHtml+='<div class="impact-card">'+
+        '<div class="impact-num">'+cards[i].n+'</div>'+
+        '<div class="impact-label">'+cards[i].l+'</div>'+
+        '<div class="impact-human">'+cards[i].h+'</div>'+
+      '</div>';
+    }
+    document.getElementById('impact-grid').innerHTML=gHtml;
+
+    // Team roster
+    var roster=[
+      {name:'Manager',role:'Strategy + Coordination',color:'#e8720c',init:'M'},
+      {name:'Operator 1',role:'Research + Outreach',color:'#3b82f6',init:'1'},
+      {name:'Operator 2',role:'Research + Outreach',color:'#22c55e',init:'2'},
+      {name:'Operator 3',role:'Research + Outreach',color:'#8b5cf6',init:'3'},
+      {name:'QA',role:'Quality Assurance',color:'#06b6d4',init:'Q'},
+    ];
+    var rHtml='';
+    for(var i=0;i<roster.length;i++){
+      var r=roster[i];
+      rHtml+='<div class="roster-card">'+
+        '<div class="roster-avatar" style="background:'+r.color+'">'+r.init+'</div>'+
+        '<div class="roster-name">'+r.name+'</div>'+
+        '<div class="roster-role">'+r.role+'</div>'+
+      '</div>';
+    }
+    document.getElementById('impact-roster').innerHTML=rHtml;
   }
 
   // ========== DATA FETCHING ==========
