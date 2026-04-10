@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Salesteq</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%;background:#000;color:#fff;font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display','Helvetica Neue',sans-serif;-webkit-font-smoothing:antialiased;overflow:hidden;cursor:none}
+
+.slide{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:80px;opacity:0;pointer-events:none;transition:opacity .6s ease}
+.slide.active{opacity:1;pointer-events:auto}
+
+/* Typography */
+.t1{font-size:72px;font-weight:700;letter-spacing:-2.5px;line-height:1.1;text-align:center}
+.t2{font-size:48px;font-weight:600;letter-spacing:-1.5px;line-height:1.2;text-align:center}
+.t3{font-size:28px;font-weight:400;letter-spacing:-.5px;line-height:1.5;text-align:center;color:#888}
+.t4{font-size:20px;font-weight:400;color:#666;text-align:center;line-height:1.6;max-width:700px}
+.accent{color:#e8720c}
+.dim{color:#444}
+
+/* Spacers */
+.gap-s{height:16px}.gap-m{height:32px}.gap-l{height:48px}.gap-xl{height:72px}
+
+/* Grid */
+.row{display:flex;gap:48px;align-items:flex-start;justify-content:center;flex-wrap:wrap}
+.col{text-align:center;max-width:200px}
+.col-wide{text-align:center;max-width:280px}
+
+/* Stats */
+.stat{font-size:56px;font-weight:700;letter-spacing:-2px;font-family:'SF Mono',monospace}
+.stat-label{font-size:14px;color:#666;margin-top:4px;letter-spacing:.5px}
+
+/* Product cards */
+.product{text-align:left;max-width:240px}
+.product-name{font-size:20px;font-weight:600;margin-bottom:6px}
+.product-desc{font-size:14px;color:#888;line-height:1.5}
+
+/* Case study */
+.case-row{display:flex;gap:64px;align-items:center;justify-content:center}
+.case-stat{text-align:center}
+.case-num{font-size:64px;font-weight:700;letter-spacing:-3px;color:#e8720c}
+.case-label{font-size:13px;color:#666;margin-top:4px;text-transform:uppercase;letter-spacing:1px}
+
+/* Demo slide */
+.demo-url{font-family:'SF Mono',monospace;font-size:24px;color:#e8720c;letter-spacing:-.5px}
+
+/* Navigation hint */
+.nav{position:fixed;bottom:24px;right:32px;font-size:11px;color:#222;letter-spacing:.5px;z-index:10}
+.progress{position:fixed;top:0;left:0;height:2px;background:#e8720c;transition:width .4s ease;z-index:10}
+
+/* Slide number */
+.slide-num{position:fixed;bottom:24px;left:32px;font-size:11px;color:#222;font-family:'SF Mono',monospace;z-index:10}
+</style>
+</head>
+<body>
+
+<div class="progress" id="progress"></div>
+<div class="slide-num" id="slideNum"></div>
+<div class="nav">click or arrow keys</div>
+
+<!-- SLIDE 1: Title -->
+<div class="slide active" data-slide="0">
+  <div class="t1">Salesteq</div>
+  <div class="gap-m"></div>
+  <div class="t3">AI Commercial Operations</div>
+</div>
+
+<!-- SLIDE 2: One line -->
+<div class="slide" data-slide="1">
+  <div class="t2">One platform replaces your<br/>sales, marketing, and service teams<br/>with <span class="accent">AI agents</span>.</div>
+</div>
+
+<!-- SLIDE 3: The problem -->
+<div class="slide" data-slide="2">
+  <div class="t3" style="margin-bottom:48px">European car dealers face</div>
+  <div class="row">
+    <div class="col">
+      <div class="stat">4</div>
+      <div class="stat-label">Languages in Switzerland</div>
+    </div>
+    <div class="col">
+      <div class="stat">200+</div>
+      <div class="stat-label">Locations per group</div>
+    </div>
+    <div class="col">
+      <div class="stat">24/7</div>
+      <div class="stat-label">Customer expectations</div>
+    </div>
+    <div class="col">
+      <div class="stat dim">0</div>
+      <div class="stat-label">Staff to hire</div>
+    </div>
+  </div>
+</div>
+
+<!-- SLIDE 4: The platform -->
+<div class="slide" data-slide="3">
+  <div class="t2" style="margin-bottom:56px">The Platform</div>
+  <div class="row">
+    <div class="product">
+      <div class="product-name accent">Badger</div>
+      <div class="product-desc">AI agents that plan, act, and learn. They execute sales, marketing, and service tasks autonomously.</div>
+    </div>
+    <div class="product">
+      <div class="product-name accent">Index</div>
+      <div class="product-desc">Commercial intelligence engine. 6.8M companies, 14M contacts. Sub-100ms search.</div>
+    </div>
+    <div class="product">
+      <div class="product-name accent">Kol</div>
+      <div class="product-desc">Voice and chat in any language. Calls, WhatsApp, web chat. Native quality.</div>
+    </div>
+    <div class="product">
+      <div class="product-name accent">Yeda</div>
+      <div class="product-desc">Self-building knowledge base. Agents learn from every customer interaction automatically.</div>
+    </div>
+  </div>
+</div>
+
+<!-- SLIDE 5: NAGHI -->
+<div class="slide" data-slide="4">
+  <div class="t3" style="margin-bottom:16px">Proof</div>
+  <div class="t2" style="margin-bottom:48px">NAGHI Motors</div>
+  <div class="case-row">
+    <div class="case-stat">
+      <div class="case-num">11+</div>
+      <div class="case-label">Brands</div>
+    </div>
+    <div class="case-stat">
+      <div class="case-num">250K</div>
+      <div class="case-label">Vehicles / Year</div>
+    </div>
+    <div class="case-stat">
+      <div class="case-num">2</div>
+      <div class="case-label">Languages</div>
+    </div>
+  </div>
+  <div class="gap-l"></div>
+  <div class="t4">Exclusive BMW dealer in Saudi Arabia. Salesteq AI handles their entire customer journey across Arabic and English, 24/7. Response time went from hours to seconds.</div>
+</div>
+
+<!-- SLIDE 6: What you're about to see -->
+<div class="slide" data-slide="5">
+  <div class="t2" style="margin-bottom:32px">What you're about to see</div>
+  <div class="t4">5 AI agents will launch a full commercial campaign targeting European automotive dealers. Research, outreach, quality review, landing page, PDF proposals. All in 15 minutes.</div>
+  <div class="gap-l"></div>
+  <div class="t3">The human equivalent: <span style="color:#fff;font-weight:600">60+ hours</span></div>
+</div>
+
+<!-- SLIDE 7: Live demo -->
+<div class="slide" data-slide="6">
+  <div class="t3" style="margin-bottom:16px">Live</div>
+  <div class="t1">Demo</div>
+  <div class="gap-l"></div>
+  <div class="demo-url">automotive.salesteq.com</div>
+</div>
+
+<script>
+var current=0;
+var slides=document.querySelectorAll('.slide');
+var total=slides.length;
+
+function go(n){
+  if(n<0||n>=total)return;
+  slides[current].classList.remove('active');
+  current=n;
+  slides[current].classList.add('active');
+  document.getElementById('progress').style.width=((current+1)/total*100)+'%';
+  document.getElementById('slideNum').textContent=(current+1)+' / '+total;
+}
+
+document.addEventListener('keydown',function(e){
+  if(e.key==='ArrowRight'||e.key===' '||e.key==='Enter')go(current+1);
+  if(e.key==='ArrowLeft'||e.key==='Backspace')go(current-1);
+  if(e.key==='Home')go(0);
+  if(e.key==='End')go(total-1);
+});
+
+document.addEventListener('click',function(e){
+  if(e.clientX>window.innerWidth/2)go(current+1);
+  else go(current-1);
+});
+
+go(0);
+</script>
+</body>
+</html>

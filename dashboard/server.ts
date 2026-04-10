@@ -970,6 +970,9 @@ a:hover{text-decoration:underline}
 </html>`;
 }
 
+// ── Deck ──
+app.use("/deck", express.static(path.join("/root/commercial-ops", "deck")));
+
 // ── Admin Routes ──
 app.use(express.json());
 
