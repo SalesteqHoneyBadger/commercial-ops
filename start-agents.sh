@@ -25,7 +25,9 @@ touch "$DATA_DIR/prospects.jsonl" "$DATA_DIR/outreach-draft.jsonl" "$DATA_DIR/ou
 
 # Kill existing session
 tmux kill-session -t "$SESSION" 2>/dev/null
-fuser -k 3001/tcp 2>/dev/null
+if [ -z "$SKIP_DASHBOARD_KILL" ]; then
+  fuser -k 3001/tcp 2>/dev/null
+fi
 sleep 1
 
 # ── Launch function for Claude Code agents ──

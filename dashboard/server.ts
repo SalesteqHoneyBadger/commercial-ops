@@ -1,918 +1,877 @@
 import express from "express";
 import { execSync } from "child_process";
-import { readFileSync, existsSync } from "fs";
+import * as fs from "fs";
+import * as path from "path";
 
 const app = express();
-app.use(express.json());
-
-const SESSION = "commercial-ops";
+const PORT = 3001;
 const DATA_DIR = "/tmp/commercial-ops";
-const OUTREACH_DRAFT_LOG = `${DATA_DIR}/outreach-draft.jsonl`;
-const OUTREACH_APPROVED_LOG = `${DATA_DIR}/outreach-approved.jsonl`;
-const PROSPECTS_LOG = `${DATA_DIR}/prospects.jsonl`;
-const QA_REVIEWS_LOG = `${DATA_DIR}/qa-reviews.jsonl`;
-const QA_FEEDBACK_LOG = `${DATA_DIR}/qa-feedback.jsonl`;
-const ASSETS_LOG = `${DATA_DIR}/assets.jsonl`;
+const TMUX_SESSION = "commercial-ops";
 
+// --- Agent definitions ---
 const AGENTS = [
-  { id: 1, name: "Manager",    window: "Manager",    windowIdx: 0, color: "#e8720c", role: "Campaign Coordinator" },
-  { id: 2, name: "Operator-1", window: "Operator-1", windowIdx: 1, color: "#3b82f6", role: "Commercial Operator" },
-  { id: 3, name: "Operator-2", window: "Operator-2", windowIdx: 2, color: "#22c55e", role: "Commercial Operator" },
-  { id: 4, name: "Operator-3", window: "Operator-3", windowIdx: 3, color: "#8b5cf6", role: "Commercial Operator" },
-  { id: 5, name: "QA",         window: "QA",         windowIdx: 4, color: "#06b6d4", role: "Quality Assurance" },
+  { id: 1, name: "Manager", windowIdx: 0, color: "#e8720c", role: "Campaign Coordinator" },
+  { id: 2, name: "Operator-1", windowIdx: 1, color: "#3b82f6", role: "Commercial Operator" },
+  { id: 3, name: "Operator-2", windowIdx: 2, color: "#22c55e", role: "Commercial Operator" },
+  { id: 4, name: "Operator-3", windowIdx: 3, color: "#8b5cf6", role: "Commercial Operator" },
+  { id: 5, name: "QA", windowIdx: 4, color: "#06b6d4", role: "Quality Review" },
 ];
 
-// Activity stream — stores last N events from all agents
-interface ActivityEvent {
-  ts: number;
-  agentId: number;
-  agentName: string;
-  color: string;
-  text: string;
-}
-const activityStream: ActivityEvent[] = [];
-const MAX_ACTIVITY = 200;
-const previousOutputs: Record<number, string> = {};
-
-function sessionExists(): boolean {
-  try { execSync(`tmux has-session -t ${SESSION} 2>/dev/null`); return true; } catch { return false; }
-}
-
-function getAgentStatus(windowIdx: number): string {
+// --- Helpers ---
+function readJsonl(filename: string): any[] {
+  const fp = path.join(DATA_DIR, filename);
   try {
-    const pane = execSync(
-      `tmux list-panes -t ${SESSION}:${windowIdx} -F "#{pane_current_command}" 2>/dev/null`
-    ).toString().trim();
-    if (pane.includes("claude")) return "running";
-    if (pane.includes("node") || pane.includes("tsx")) return "running";
-    return "idle";
-  } catch { return "offline"; }
-}
-
-function getAgentOutput(windowIdx: number, lines = 15): string {
-  try {
-    return execSync(
-      `tmux capture-pane -t ${SESSION}:${windowIdx} -p -S -${lines} 2>/dev/null`
-    ).toString().trim();
-  } catch { return ""; }
-}
-
-// Poll agents for new output and add to activity stream
-function pollAgentActivity() {
-  if (!sessionExists()) return;
-  for (const agent of AGENTS) {
-    try {
-      const output = getAgentOutput(agent.windowIdx, 30);
-      const prev = previousOutputs[agent.id] || "";
-      if (output && output !== prev) {
-        const prevLines = prev.split("\n");
-        const newLines = output.split("\n");
-        const diff: string[] = [];
-        for (const line of newLines) {
-          const trimmed = line.trim();
-          if (trimmed && !prevLines.includes(line) && trimmed.length > 2) {
-            if (!trimmed.match(/^[$>%#]+$/) && !trimmed.match(/^\d+\.\d+s$/)) {
-              diff.push(trimmed);
-            }
-          }
+    const raw = fs.readFileSync(fp, "utf-8").trim();
+    if (!raw) return [];
+    return raw
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => {
+        try {
+          return JSON.parse(line);
+        } catch {
+          return null;
         }
-        for (const line of diff.slice(-5)) {
-          activityStream.push({
-            ts: Date.now(),
-            agentId: agent.id,
-            agentName: agent.name,
-            color: agent.color,
-            text: line.substring(0, 200),
-          });
-        }
-        while (activityStream.length > MAX_ACTIVITY) activityStream.shift();
-        previousOutputs[agent.id] = output;
-      }
-    } catch {}
+      })
+      .filter(Boolean);
+  } catch {
+    return [];
   }
 }
 
-// Poll every 3 seconds
-setInterval(pollAgentActivity, 3000);
-
-// Get git log for recent commits (with timestamps)
-function getRecentCommits(n = 15): string[] {
+function captureTmuxPane(windowIdx: number): string[] {
   try {
-    return execSync(`git log --format="%h|%ai|%s" -${n} 2>/dev/null`, { cwd: process.cwd(), stdio: "pipe" }).toString().trim().split("\n").filter(Boolean);
-  } catch { return []; }
+    const out = execSync(
+      `tmux capture-pane -t ${TMUX_SESSION}:${windowIdx} -p -S -30 2>/dev/null`,
+      { timeout: 2000, encoding: "utf-8" }
+    );
+    const lines = out.split("\n").filter((l) => l.trim().length > 0);
+    return lines.slice(-5);
+  } catch {
+    return ["[waiting for output...]"];
+  }
 }
 
-// Read JSONL file
-function readJsonl(filePath: string, n = 20): any[] {
+function getAgentStatuses() {
+  return AGENTS.map((a) => {
+    const lines = captureTmuxPane(a.windowIdx);
+    const hasRecent = lines.length > 1;
+    return {
+      ...a,
+      status: hasRecent ? "active" : "idle",
+      terminalLines: lines,
+    };
+  });
+}
+
+function getGitCommits(): any[] {
   try {
-    if (!existsSync(filePath)) return [];
-    const lines = readFileSync(filePath, "utf-8").trim().split("\n").filter(Boolean);
-    return lines.slice(-n).map((line) => {
-      try { return JSON.parse(line); } catch { return null; }
-    }).filter(Boolean).reverse();
-  } catch { return []; }
+    const out = execSync(
+      `cd ${DATA_DIR} && git log --oneline --format='%H|||%s|||%an|||%ar' -20 2>/dev/null`,
+      { timeout: 3000, encoding: "utf-8" }
+    );
+    return out
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => {
+        const [hash, msg, author, rel] = line.split("|||");
+        return { hash: hash?.slice(0, 8), message: msg, author, relative: rel };
+      });
+  } catch {
+    return [];
+  }
 }
 
-function countLines(filePath: string): number {
-  try {
-    if (!existsSync(filePath)) return 0;
-    return readFileSync(filePath, "utf-8").trim().split("\n").filter(Boolean).length;
-  } catch { return 0; }
-}
+// --- API Routes ---
+app.get("/api/status", (_req, res) => {
+  const agents = getAgentStatuses();
+  const active = agents.filter((a) => a.status === "active").length;
+  const leads = readJsonl("prospects.jsonl");
+  const drafts = readJsonl("outreach-draft.jsonl");
+  const approved = readJsonl("outreach-approved.jsonl");
+  const assets = readJsonl("assets.jsonl");
+  const qa = readJsonl("qa-reviews.jsonl");
+  res.json({
+    agents,
+    activeCount: active,
+    totalCount: agents.length,
+    counts: {
+      leads: leads.length,
+      outreach: drafts.length + approved.length,
+      assets: assets.length,
+      qa: qa.length,
+    },
+  });
+});
 
-// Get campaign pipeline stats
-function getPipelineStats(): { prospects: number; drafts: number; approved: number; assets: number; events: any[] } {
-  const prospects = readJsonl(PROSPECTS_LOG, 100);
-  const drafts = readJsonl(OUTREACH_DRAFT_LOG, 100);
-  const approved = readJsonl(OUTREACH_APPROVED_LOG, 100);
-  const assets = countLines(ASSETS_LOG);
+app.get("/api/stream", (_req, res) => {
+  const commits = getGitCommits();
+  res.json({ commits, events: [] });
+});
 
-  // Build pipeline events from sources
-  const events: any[] = [];
-  for (const p of prospects.slice(0, 10)) {
-    events.push({ type: "prospect", company: p.company || p.name || "Unknown", source: p.addedBy || "operator", ts: p.ts || Date.now() / 1000, msg: p.notes || "" });
-  }
-  for (const e of drafts.slice(0, 5)) {
-    events.push({ type: "outreach", company: e.company || e.to || "Unknown", status: e.status || "draft", ts: e.ts || Date.now() / 1000, msg: e.subject || "" });
-  }
-  for (const e of approved.slice(0, 5)) {
-    events.push({ type: "approved", company: e.company || e.to || "Unknown", status: "approved", ts: e.ts || Date.now() / 1000, msg: e.subject || "" });
-  }
-  events.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+app.get("/api/leads", (_req, res) => {
+  res.json(readJsonl("prospects.jsonl"));
+});
 
-  return { prospects: prospects.length, drafts: drafts.length, approved: approved.length, assets, events: events.slice(0, 15) };
-}
+app.get("/api/outreach", (_req, res) => {
+  const drafts = readJsonl("outreach-draft.jsonl");
+  const approved = readJsonl("outreach-approved.jsonl");
+  res.json({ drafts, approved });
+});
 
-// HTML
+app.get("/api/assets", (_req, res) => {
+  res.json(readJsonl("assets.jsonl"));
+});
+
+app.get("/api/qa", (_req, res) => {
+  res.json(readJsonl("qa-reviews.jsonl"));
+});
+
+// --- Dashboard HTML ---
 app.get("/", (_req, res) => {
-  res.send(`<!DOCTYPE html>
+  res.type("html").send(getDashboardHtml());
+});
+
+function getDashboardHtml(): string {
+  return `<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Commercial Ops — Control Panel</title>
-  <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro', 'Segoe UI', sans-serif;
-      background: #111; color: #ccc; min-height: 100vh;
-    }
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Salesteq \u2014 Commercial Ops</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#111;--card:#1a1a1a;--border:#252525;--header:#151515;--terminal:#131313;
+  --text:#ccc;--text2:#777;--text3:#555;--accent:#e8720c;
+  --font:-apple-system,BlinkMacSystemFont,'SF Pro','Segoe UI',sans-serif;
+  --mono:'SF Mono','Fira Code','Consolas',monospace;
+  --blue:#3b82f6;--green:#22c55e;--purple:#8b5cf6;--cyan:#06b6d4;--amber:#f59e0b;--red:#ef4444;
+}
+html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--font);font-size:14px;overflow:hidden}
+a{color:var(--accent);text-decoration:none}
+a:hover{text-decoration:underline}
 
-    /* Header */
-    .header {
-      padding: 14px 24px; border-bottom: 1px solid #222;
-      display: flex; align-items: center; justify-content: space-between;
-      background: #151515;
-    }
-    .header-left { display: flex; align-items: center; gap: 12px; }
-    .header h1 { font-size: 15px; font-weight: 600; color: #ddd; letter-spacing: -0.3px; }
-    .header .subtitle { font-size: 11px; color: #666; margin-top: 1px; }
-    .infra-dots { display: flex; gap: 14px; align-items: center; }
-    .infra-dot { display: flex; align-items: center; gap: 5px; font-size: 11px; color: #777; }
-    .idot { width: 6px; height: 6px; border-radius: 50%; }
-    .idot.on { background: #5a5; }
-    .idot.off { background: #a55; }
+/* Scrollbar */
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+::-webkit-scrollbar-thumb:hover{background:#333}
 
-    /* Layout */
-    .layout { display: flex; height: calc(100vh - 52px); }
+/* === TOP BAR === */
+.topbar{
+  position:fixed;top:0;left:0;right:0;height:54px;
+  background:var(--header);border-bottom:1px solid var(--border);
+  display:flex;align-items:center;justify-content:space-between;
+  padding:0 28px;z-index:100;
+  backdrop-filter:blur(12px);
+}
+.topbar-left{display:flex;align-items:center;gap:14px}
+.topbar-left svg{width:30px;height:30px;flex-shrink:0}
+.topbar-title{font-size:17px;font-weight:600;color:var(--text);letter-spacing:-0.4px}
+.topbar-right{display:flex;align-items:center;gap:16px;font-size:13px;color:var(--text2)}
+.live-dot{width:8px;height:8px;border-radius:50%;background:var(--green);box-shadow:0 0 8px var(--green),0 0 16px rgba(34,197,94,.3);animation:pulse-dot 2s ease-in-out infinite}
+@keyframes pulse-dot{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.5;transform:scale(.85)}}
+.agent-count-display{font-family:var(--mono);font-size:12px;color:var(--text2);letter-spacing:.3px}
 
-    /* Agent Grid */
-    .agents-section { flex: 1; overflow-y: auto; padding: 20px; }
-    .section-title {
-      font-size: 10px; font-weight: 600; color: #555; text-transform: uppercase;
-      letter-spacing: 1px; margin-bottom: 12px;
-    }
-    .agents-grid {
-      display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 12px;
-      margin-bottom: 24px;
-    }
-    .agent-box {
-      background: #1a1a1a; border: 1px solid #252525; border-radius: 10px;
-      padding: 14px; transition: border-color 0.2s;
-    }
-    .agent-box:hover { border-color: #333; }
-    .agent-box.running { border-top: 2px solid #e8720c; }
-    .agent-box.mgr { grid-column: 1 / 2; }
-    .agent-box.qa { grid-column: 3 / 4; }
+/* === TABS === */
+.tabs{display:flex;gap:3px}
+.tab{
+  padding:9px 18px;font-size:13px;font-weight:500;color:var(--text3);
+  cursor:pointer;border-radius:7px;transition:all .2s;
+  position:relative;user-select:none;white-space:nowrap;
+}
+.tab:hover{color:var(--text2);background:rgba(255,255,255,.03)}
+.tab.active{color:var(--accent);background:rgba(232,114,12,.08)}
+.tab .badge{
+  font-size:10px;font-family:var(--mono);
+  background:rgba(255,255,255,.06);color:var(--text3);
+  padding:2px 7px;border-radius:9px;margin-left:7px;vertical-align:middle;
+  transition:all .2s;
+}
+.tab.active .badge{background:rgba(232,114,12,.15);color:var(--accent)}
 
-    /* Box header */
-    .box-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
-    .box-identity { display: flex; align-items: center; gap: 10px; }
-    .box-avatar {
-      width: 32px; height: 32px; border-radius: 8px; background: #2a2a2a;
-      display: flex; align-items: center; justify-content: center;
-      font-size: 12px; font-weight: 700; color: #999;
-    }
-    .box-name { font-size: 14px; font-weight: 600; color: #ddd; }
-    .box-role { font-size: 11px; color: #666; margin-top: 2px; }
-    .box-status {
-      font-size: 9px; font-weight: 600; padding: 3px 7px; border-radius: 4px;
-      text-transform: uppercase; letter-spacing: 0.3px;
-    }
-    .box-status.running { background: #2e2210; color: #e8720c; }
-    .box-status.idle { background: #2e2a1e; color: #aa8; }
-    .box-status.offline { background: #2e1e1e; color: #a77; }
+/* === MAIN CONTENT === */
+.main{position:fixed;top:54px;left:0;right:0;bottom:0;overflow-y:auto;overflow-x:hidden;padding:24px 28px}
+.tab-content{display:none}
+.tab-content.active{display:block;animation:fadeIn .2s ease}
+@keyframes fadeIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
 
-    /* KITT scanner cubes */
-    .cubes-row {
-      display: flex; gap: 2px; margin-bottom: 10px; height: 10px;
-      align-items: center;
-    }
-    .cube {
-      width: 6px; height: 6px; border-radius: 1px;
-      background: #222; transition: all 0.15s;
-    }
-    .cubes-row.scanning .cube {
-      animation: kitt-scan 2s ease-in-out infinite;
-    }
-    .cubes-row.scanning .cube:nth-child(1)  { animation-delay: 0.00s; }
-    .cubes-row.scanning .cube:nth-child(2)  { animation-delay: 0.06s; }
-    .cubes-row.scanning .cube:nth-child(3)  { animation-delay: 0.12s; }
-    .cubes-row.scanning .cube:nth-child(4)  { animation-delay: 0.18s; }
-    .cubes-row.scanning .cube:nth-child(5)  { animation-delay: 0.24s; }
-    .cubes-row.scanning .cube:nth-child(6)  { animation-delay: 0.30s; }
-    .cubes-row.scanning .cube:nth-child(7)  { animation-delay: 0.36s; }
-    .cubes-row.scanning .cube:nth-child(8)  { animation-delay: 0.42s; }
-    .cubes-row.scanning .cube:nth-child(9)  { animation-delay: 0.48s; }
-    .cubes-row.scanning .cube:nth-child(10) { animation-delay: 0.54s; }
-    .cubes-row.scanning .cube:nth-child(11) { animation-delay: 0.60s; }
-    .cubes-row.scanning .cube:nth-child(12) { animation-delay: 0.66s; }
-    .cubes-row.scanning .cube:nth-child(13) { animation-delay: 0.72s; }
-    .cubes-row.scanning .cube:nth-child(14) { animation-delay: 0.78s; }
-    .cubes-row.scanning .cube:nth-child(15) { animation-delay: 0.84s; }
-    .cubes-row.scanning .cube:nth-child(16) { animation-delay: 0.90s; }
-    @keyframes kitt-scan {
-      0%, 100% { background: #222; box-shadow: none; }
-      50% { background: #e8720c; box-shadow: 0 0 8px #e8720c, 0 0 2px #e8720c; }
-    }
-    .cubes-row.idle .cube { background: #1a1a1a; }
-    .cubes-row.offline .cube { background: #1a1a1a; }
+/* =========================================
+   MISSION CONTROL
+   ========================================= */
+.mc-layout{display:grid;grid-template-columns:1fr 360px;gap:24px;height:calc(100vh - 102px);min-width:0;overflow:hidden}
+.agent-grid{display:grid;grid-template-columns:repeat(3,1fr);grid-template-rows:repeat(2,1fr);gap:14px;min-width:0;overflow:hidden}
+.agent-card{
+  background:var(--card);border:1px solid var(--border);border-radius:12px;
+  padding:16px;display:flex;flex-direction:column;gap:10px;
+  transition:border-color .3s,box-shadow .3s;min-width:0;overflow:hidden;
+}
+.agent-card:hover{border-color:rgba(255,255,255,.08);box-shadow:0 4px 20px rgba(0,0,0,.3)}
+.agent-header{display:flex;align-items:center;gap:10px}
+.agent-avatar{
+  width:38px;height:38px;border-radius:50%;
+  display:flex;align-items:center;justify-content:center;
+  font-size:15px;font-weight:700;color:#fff;flex-shrink:0;
+  box-shadow:0 0 12px rgba(0,0,0,.4);
+}
+.agent-info{flex:1;min-width:0}
+.agent-name{font-size:14px;font-weight:600;color:var(--text)}
+.agent-role{font-size:11px;color:var(--text3);margin-top:1px}
+.status-badge{
+  font-size:9px;font-family:var(--mono);padding:3px 8px;border-radius:4px;
+  text-transform:uppercase;letter-spacing:.6px;font-weight:700;flex-shrink:0;
+}
+.status-active{background:rgba(34,197,94,.1);color:var(--green);box-shadow:0 0 8px rgba(34,197,94,.1)}
+.status-idle{background:rgba(119,119,119,.08);color:var(--text3)}
 
-    /* Terminal preview */
-    .box-terminal {
-      background: #131313; border-radius: 6px; padding: 10px 12px;
-      font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
-      font-size: 11px; line-height: 1.6; color: #777;
-      height: 80px; overflow: hidden; white-space: pre-wrap; word-break: break-all;
-      border: 1px solid #1e1e1e;
-    }
+/* KITT Scanner */
+.kitt-row{display:flex;gap:3px;height:6px;padding:0 2px}
+.kitt-cell{flex:1;border-radius:2px;background:rgba(255,255,255,.03);transition:all .1s ease}
 
-    /* Campaign Pipeline */
-    .build-section { margin-bottom: 24px; }
-    .build-header {
-      display: flex; align-items: center; justify-content: space-between;
-      margin-bottom: 12px;
-    }
-    .build-status-badge {
-      display: flex; align-items: center; gap: 8px;
-      font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
-      font-size: 12px; font-weight: 600;
-    }
-    .build-dot {
-      width: 8px; height: 8px; border-radius: 50%;
-    }
-    .build-dot.pass { background: #5a5; box-shadow: 0 0 6px rgba(90,170,90,0.4); }
-    .build-dot.fail { background: #e55; box-shadow: 0 0 6px rgba(230,90,90,0.4); }
-    .build-dot.none { background: #555; }
-    .build-stats {
-      display: flex; gap: 16px; font-size: 11px; color: #666;
-      font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
-    }
-    .build-stats .stat-val { color: #999; font-weight: 600; }
+/* Terminal preview */
+.term-preview{
+  background:var(--terminal);border-radius:8px;
+  padding:10px 12px;font-family:var(--mono);font-size:10.5px;line-height:1.6;
+  color:var(--text3);flex:1;overflow:hidden;min-height:60px;
+  border:1px solid rgba(255,255,255,.03);
+}
+.term-line{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
-    .build-events {
-      background: #1a1a1a; border: 1px solid #252525; border-radius: 10px;
-      overflow: hidden;
-    }
-    .build-ev {
-      padding: 8px 14px; border-bottom: 1px solid #1e1e1e;
-      display: flex; align-items: center; gap: 10px;
-      font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
-      font-size: 11px; transition: background 0.15s;
-    }
-    .build-ev:last-child { border-bottom: none; }
-    .build-ev:hover { background: #222; }
-    .build-icon { font-size: 13px; width: 20px; text-align: center; }
-    .build-sha { color: #e8720c; font-weight: 600; min-width: 56px; }
-    .build-msg { color: #999; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .build-time { color: #555; min-width: 50px; text-align: right; }
-    .build-ev.prospect .build-icon { color: #3b82f6; }
-    .build-ev.outreach .build-icon { color: #22c55e; }
-    .build-ev.approved .build-icon { color: #06b6d4; }
+/* Sidebar */
+.sidebar{
+  background:var(--card);border:1px solid var(--border);border-radius:12px;
+  display:flex;flex-direction:column;overflow:hidden;
+}
+.sidebar-header{
+  padding:16px 18px;border-bottom:1px solid var(--border);
+  display:flex;align-items:center;gap:10px;font-size:14px;font-weight:600;
+}
+.live-badge{
+  font-size:9px;font-family:var(--mono);
+  background:rgba(239,68,68,.12);color:var(--red);
+  padding:3px 8px;border-radius:4px;text-transform:uppercase;
+  letter-spacing:.6px;font-weight:700;animation:pulse-dot 2s infinite;
+}
+.sidebar-body{flex:1;overflow-y:auto;padding:4px 0}
+.commit-item{padding:10px 18px;border-bottom:1px solid rgba(255,255,255,.025);transition:background .15s}
+.commit-item:hover{background:rgba(255,255,255,.02)}
+.commit-hash{font-family:var(--mono);color:var(--accent);font-size:11px;font-weight:500}
+.commit-msg{color:var(--text2);margin-top:3px;font-size:12px;line-height:1.4}
+.commit-meta{font-size:10px;color:var(--text3);margin-top:3px}
 
-    /* Outreach Emails */
-    .review-section { margin-bottom: 24px; }
-    .review-events {
-      background: #1a1a1a; border: 1px solid #252525; border-radius: 10px;
-      overflow: hidden;
-    }
-    .review-ev {
-      padding: 10px 14px; border-bottom: 1px solid #1e1e1e;
-      font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
-      font-size: 11px; transition: background 0.15s; cursor: pointer;
-    }
-    .review-ev:last-child { border-bottom: none; }
-    .review-ev:hover { background: #222; }
-    .review-top { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
-    .review-verdict {
-      font-size: 9px; font-weight: 700; padding: 2px 6px; border-radius: 3px;
-      text-transform: uppercase; letter-spacing: 0.3px;
-    }
-    .review-verdict.DRAFT { background: #2e2a1a; color: #da5; }
-    .review-verdict.APPROVED { background: #1a2e1a; color: #5a5; }
-    .review-sha { color: #e8720c; font-weight: 600; }
-    .review-msg { color: #999; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .review-time { color: #555; }
-    .review-body {
-      color: #777; font-size: 11px; line-height: 1.5;
-      padding: 6px 0 0 0; display: none; white-space: pre-wrap; word-break: break-word;
-    }
-    .review-ev.expanded .review-body { display: block; }
+/* =========================================
+   LEADS
+   ========================================= */
+.pipeline-row{display:flex;gap:14px;margin-bottom:28px;flex-wrap:wrap}
+.pipeline-card{
+  background:var(--card);border:1px solid var(--border);border-radius:12px;
+  padding:20px 24px;flex:1;min-width:150px;text-align:center;
+  transition:border-color .2s;
+}
+.pipeline-card:hover{border-color:rgba(255,255,255,.08)}
+.pipeline-num{font-size:32px;font-weight:800;color:var(--text);font-family:var(--mono);letter-spacing:-1px}
+.pipeline-label{font-size:10px;color:var(--text3);margin-top:6px;text-transform:uppercase;letter-spacing:.8px;font-weight:500}
+.leads-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;padding-bottom:40px}
+.lead-card{
+  background:var(--card);border:1px solid var(--border);border-radius:12px;
+  padding:20px;transition:border-color .3s,box-shadow .3s;
+}
+.lead-card:hover{border-color:rgba(255,255,255,.08);box-shadow:0 4px 20px rgba(0,0,0,.3)}
+.lead-card.recent{
+  border-left:3px solid var(--green);
+  box-shadow:-6px 0 20px rgba(34,197,94,.06),0 0 0 1px rgba(34,197,94,.08);
+}
+.lead-company{font-size:18px;font-weight:700;color:var(--text);margin-bottom:4px;letter-spacing:-0.3px}
+.lead-country{font-size:13px;color:var(--text2);margin-bottom:12px}
+.lead-brands{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:12px}
+.brand-badge{
+  font-size:10px;background:rgba(255,255,255,.05);color:var(--text2);
+  padding:3px 9px;border-radius:5px;font-family:var(--mono);
+  border:1px solid rgba(255,255,255,.04);
+}
+.lead-meta{font-size:12px;color:var(--text3);line-height:1.7}
+.lead-meta a{font-size:12px;word-break:break-all}
+.lead-contacts{margin-top:10px;padding-top:10px;border-top:1px solid var(--border)}
+.contact-line{font-size:11px;color:var(--text3);line-height:1.7}
+.contact-name{color:var(--text2);font-weight:600}
+.lead-notes{margin-top:10px;font-size:11px;color:var(--text3);font-style:italic;line-height:1.5}
 
-    /* QA Reviews */
-    .qa-section { margin-bottom: 24px; }
-    .qa-events {
-      background: #1a1a1a; border: 1px solid #252525; border-radius: 10px;
-      overflow: hidden;
-    }
-    .qa-ev {
-      padding: 10px 14px; border-bottom: 1px solid #1e1e1e;
-      font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
-      font-size: 11px; transition: background 0.15s; cursor: pointer;
-    }
-    .qa-ev:last-child { border-bottom: none; }
-    .qa-ev:hover { background: #222; }
-    .qa-top { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
-    .qa-verdict {
-      font-size: 9px; font-weight: 700; padding: 2px 6px; border-radius: 3px;
-      text-transform: uppercase; letter-spacing: 0.3px;
-    }
-    .qa-verdict.PASS { background: #1a2e1a; color: #5a5; }
-    .qa-verdict.NEEDS_ATTENTION { background: #2e1a1a; color: #e55; }
-    .qa-item { color: #06b6d4; font-weight: 600; }
-    .qa-feedback { color: #999; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .qa-time { color: #555; }
-    .qa-body {
-      color: #777; font-size: 11px; line-height: 1.5;
-      padding: 6px 0 0 0; display: none; white-space: pre-wrap; word-break: break-word;
-    }
-    .qa-ev.expanded .qa-body { display: block; }
+/* =========================================
+   OUTREACH
+   ========================================= */
+.section-title{
+  font-size:16px;font-weight:600;color:var(--text);margin-bottom:16px;
+  display:flex;align-items:center;gap:10px;
+}
+.section-title .count{font-size:12px;font-family:var(--mono);color:var(--text3)}
+.email-list{display:flex;flex-direction:column;gap:10px;margin-bottom:36px}
+.email-card{
+  background:var(--card);border:1px solid var(--border);border-radius:12px;
+  padding:18px 20px;cursor:pointer;transition:border-color .2s;
+}
+.email-card:hover{border-color:rgba(255,255,255,.08)}
+.email-top{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;gap:12px}
+.email-subject{font-size:15px;font-weight:600;color:var(--text);margin-bottom:2px}
+.email-addr{font-size:11px;color:var(--text3);font-family:var(--mono);margin-bottom:2px}
+.email-preview{font-size:12px;color:var(--text2);line-height:1.6;margin-top:6px}
+.email-full{
+  display:none;font-size:12px;color:var(--text2);line-height:1.8;
+  margin-top:12px;padding-top:12px;border-top:1px solid var(--border);white-space:pre-wrap;
+}
+.email-card.expanded .email-full{display:block}
+.email-card.expanded .email-preview{display:none}
+.email-timestamp{font-size:10px;color:var(--text3);font-family:var(--mono);margin-top:10px}
+.outreach-status{
+  font-size:9px;font-family:var(--mono);padding:3px 9px;border-radius:5px;
+  text-transform:uppercase;letter-spacing:.6px;font-weight:700;flex-shrink:0;white-space:nowrap;
+}
+.outreach-draft{background:rgba(245,158,11,.1);color:var(--amber)}
+.outreach-approved{background:rgba(34,197,94,.1);color:var(--green)}
+.outreach-sent{background:rgba(59,130,246,.1);color:var(--blue)}
 
-    /* Prospects */
-    .alerts-section { margin-bottom: 24px; }
-    .alert-events {
-      background: #1a1a1a; border: 1px solid #252525; border-radius: 10px;
-      overflow: hidden;
-    }
-    .alert-ev {
-      padding: 10px 14px; border-bottom: 1px solid #1e1e1e;
-      font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
-      font-size: 11px; transition: background 0.15s; cursor: pointer;
-    }
-    .alert-ev:last-child { border-bottom: none; }
-    .alert-ev:hover { background: #222; }
-    .alert-top { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
-    .alert-severity {
-      font-size: 9px; font-weight: 700; padding: 2px 6px; border-radius: 3px;
-      text-transform: uppercase; letter-spacing: 0.3px;
-    }
-    .alert-severity.HOT { background: #2e1a1a; color: #e55; }
-    .alert-severity.WARM { background: #2e2a1a; color: #da5; }
-    .alert-severity.COLD { background: #1a2a2e; color: #5ac; }
-    .alert-severity.NEW { background: #1a2e1a; color: #5a5; }
-    .alert-summary { color: #999; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .alert-count { color: #777; min-width: 50px; }
-    .alert-time { color: #555; }
-    .alert-body {
-      color: #777; font-size: 11px; line-height: 1.5;
-      padding: 6px 0 0 0; display: none; white-space: pre-wrap; word-break: break-word;
-    }
-    .alert-ev.expanded .alert-body { display: block; }
+/* =========================================
+   ASSETS
+   ========================================= */
+.assets-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;padding-bottom:40px}
+.asset-card{
+  background:var(--card);border:1px solid var(--border);border-radius:12px;
+  padding:20px;cursor:pointer;transition:border-color .2s,box-shadow .2s;
+}
+.asset-card:hover{border-color:rgba(255,255,255,.08);box-shadow:0 4px 20px rgba(0,0,0,.3)}
+.asset-icon{font-size:30px;margin-bottom:10px}
+.asset-title{font-size:15px;font-weight:600;color:var(--text);margin-bottom:4px}
+.asset-type{
+  font-size:10px;font-family:var(--mono);color:var(--text3);
+  text-transform:uppercase;letter-spacing:.6px;margin-bottom:10px;
+}
+.asset-preview{font-size:12px;color:var(--text2);line-height:1.6}
+.asset-full{
+  display:none;font-size:12px;color:var(--text2);line-height:1.8;
+  margin-top:12px;padding-top:12px;border-top:1px solid var(--border);white-space:pre-wrap;
+}
+.asset-card.expanded .asset-full{display:block}
+.asset-card.expanded .asset-preview{display:none}
 
-    /* Right panel */
-    .right-panel {
-      width: 480px; border-left: 1px solid #222;
-      display: flex; flex-direction: column; background: #141414;
-    }
-    .panel-header {
-      padding: 14px 16px; border-bottom: 1px solid #222;
-      display: flex; align-items: center; justify-content: space-between;
-    }
-    .panel-header h2 { font-size: 13px; font-weight: 600; color: #ccc; }
-    .live-badge {
-      display: flex; align-items: center; gap: 5px;
-      font-size: 10px; color: #5a5; font-weight: 500;
-    }
-    .live-dot {
-      width: 5px; height: 5px; border-radius: 50%; background: #5a5;
-      animation: livePulse 2s infinite;
-    }
-    @keyframes livePulse {
-      0%, 100% { opacity: 1; }
-      50% { opacity: 0.3; }
-    }
+/* =========================================
+   QA REVIEWS
+   ========================================= */
+.qa-stats-row{display:flex;gap:14px;margin-bottom:28px}
+.qa-stat{
+  background:var(--card);border:1px solid var(--border);border-radius:12px;
+  padding:20px 28px;text-align:center;min-width:140px;
+}
+.qa-stat-num{font-size:32px;font-weight:800;font-family:var(--mono);letter-spacing:-1px}
+.qa-stat-label{font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:.8px;margin-top:6px;font-weight:500}
+.qa-list{display:flex;flex-direction:column;gap:10px;padding-bottom:40px}
+.qa-card{
+  background:var(--card);border:1px solid var(--border);border-radius:12px;
+  padding:18px 20px;cursor:pointer;transition:border-color .2s;
+}
+.qa-card:hover{border-color:rgba(255,255,255,.08)}
+.qa-top{display:flex;justify-content:space-between;align-items:center;gap:12px}
+.qa-company{font-size:15px;font-weight:600;color:var(--text)}
+.qa-type{font-size:11px;color:var(--text3);font-family:var(--mono);margin-top:2px}
+.verdict{
+  font-size:9px;font-family:var(--mono);padding:3px 9px;border-radius:5px;
+  text-transform:uppercase;letter-spacing:.6px;font-weight:700;flex-shrink:0;
+}
+.verdict-pass{background:rgba(34,197,94,.1);color:var(--green)}
+.verdict-attention{background:rgba(245,158,11,.1);color:var(--amber)}
+.qa-review-text{
+  display:none;font-size:12px;color:var(--text2);line-height:1.8;
+  margin-top:12px;padding-top:12px;border-top:1px solid var(--border);white-space:pre-wrap;
+}
+.qa-card.expanded .qa-review-text{display:block}
+.qa-ts{font-size:10px;color:var(--text3);font-family:var(--mono)}
 
-    /* Stream */
-    .stream-body { flex: 1; overflow-y: auto; min-height: 0; }
-    .ev {
-      padding: 8px 18px; border-bottom: 1px solid #1c1c1c;
-      transition: background 0.15s;
-    }
-    .ev:hover { background: #1a1a1a; }
-    .ev-top { display: flex; align-items: center; gap: 8px; margin-bottom: 3px; }
-    .ev-tag {
-      font-size: 10px; font-weight: 600; padding: 2px 6px; border-radius: 3px;
-      background: #222; color: #999;
-      font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
-    }
-    .ev-time { font-size: 10px; color: #555; font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace; }
-    .ev-msg {
-      font-size: 12px; color: #888; line-height: 1.5; word-break: break-word;
-      font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
-    }
-    .ev-msg.hi { color: #ccc; }
-
-    /* Git */
-    .git-panel {
-      border-top: 1px solid #222; padding: 14px 16px;
-      max-height: 240px; overflow-y: auto; flex-shrink: 0;
-    }
-    .git-panel h3 {
-      font-size: 11px; font-weight: 600; color: #666; text-transform: uppercase;
-      letter-spacing: 0.8px; margin-bottom: 10px;
-    }
-    .gc {
-      font-size: 12px; color: #777; padding: 4px 0;
-      font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
-      line-height: 1.4;
-    }
-    .gc .gh { color: #e8720c; }
-  </style>
+/* Empty state */
+.empty-state{text-align:center;padding:60px 24px;color:var(--text3);font-size:13px;letter-spacing:.2px}
+</style>
 </head>
 <body>
-  <div class="header">
-    <div class="header-left">
-      <div>
-        <h1><span>Commercial Ops</span> — Control Panel</h1>
-        <div class="subtitle">European Automotive Expansion — HoneyBadger Structure</div>
-      </div>
-    </div>
-    <div style="display:flex;align-items:center;gap:20px">
-      <div class="infra-dots" id="infraDots"></div>
-    </div>
+
+<!-- ====== TOP BAR ====== -->
+<div class="topbar">
+  <div class="topbar-left">
+    <svg viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M50 5C25.2 5 5 25.2 5 50s20.2 45 45 45 45-20.2 45-45S74.8 5 50 5z" stroke="#e8720c" stroke-width="2.5" fill="none"/>
+      <path d="M28 65c0 0 6-35 22-35s22 35 22 35" stroke="#e8720c" stroke-width="4" stroke-linecap="round" fill="none"/>
+      <path d="M34 58c0 0 5-22 16-22s16 22 16 22" stroke="#e8720c" stroke-width="3" stroke-linecap="round" fill="none" opacity=".55"/>
+      <circle cx="50" cy="36" r="3.5" fill="#e8720c"/>
+    </svg>
+    <span class="topbar-title">Commercial Ops</span>
   </div>
+  <div class="tabs" id="tabs">
+    <div class="tab active" data-tab="mission-control">Mission Control</div>
+    <div class="tab" data-tab="leads">Leads <span class="badge" id="badge-leads">0</span></div>
+    <div class="tab" data-tab="outreach">Outreach <span class="badge" id="badge-outreach">0</span></div>
+    <div class="tab" data-tab="assets">Assets <span class="badge" id="badge-assets">0</span></div>
+    <div class="tab" data-tab="qa">QA <span class="badge" id="badge-qa">0</span></div>
+  </div>
+  <div class="topbar-right">
+    <div class="live-dot"></div>
+    <span class="agent-count-display" id="agent-count">0/5 active</span>
+  </div>
+</div>
 
-  <div class="layout">
-    <div class="agents-section">
-      <div class="section-title">Agents</div>
-      <div class="agents-grid" id="agentGrid"></div>
+<!-- ====== MAIN ====== -->
+<div class="main">
 
-      <div class="build-section">
-        <div class="build-header">
-          <div class="section-title" style="margin-bottom:0">Campaign Pipeline</div>
-          <div id="buildBadge" class="build-status-badge"></div>
-        </div>
-        <div class="build-stats" id="buildStats"></div>
-        <div class="build-events" id="buildEvents">
-          <div class="build-ev" style="color:#555;justify-content:center">No pipeline activity yet</div>
-        </div>
-      </div>
-
-      <div class="review-section">
-        <div class="section-title">Outreach Emails</div>
-        <div class="review-events" id="reviewEvents">
-          <div class="review-ev" style="color:#555;justify-content:center;cursor:default">No outreach yet</div>
-        </div>
-      </div>
-
-      <div class="qa-section">
-        <div class="section-title">QA Reviews</div>
-        <div class="qa-events" id="qaEvents">
-          <div class="qa-ev" style="color:#555;justify-content:center;cursor:default">No reviews yet</div>
-        </div>
-      </div>
-
-      <div class="alerts-section">
-        <div class="section-title">Prospects</div>
-        <div class="alert-events" id="alertEvents">
-          <div class="alert-ev" style="color:#555;justify-content:center;cursor:default">No prospects yet</div>
-        </div>
-      </div>
-    </div>
-
-    <div class="right-panel">
-      <div class="panel-header">
-        <h2>Activity</h2>
-        <div class="live-badge"><div class="live-dot"></div>LIVE</div>
-      </div>
-      <div class="stream-body" id="streamBody">
-        <div style="padding:24px;color:#333;font-size:12px;text-align:center">Waiting for activity...</div>
-      </div>
-      <div class="git-panel">
-        <h3>Recent Commits</h3>
-        <div id="gitLog" style="color:#333;font-size:11px">Loading...</div>
+  <!-- Mission Control -->
+  <div class="tab-content active" id="tab-mission-control">
+    <div class="mc-layout">
+      <div class="agent-grid" id="agent-grid"></div>
+      <div class="sidebar">
+        <div class="sidebar-header">Activity Stream <span class="live-badge">LIVE</span></div>
+        <div class="sidebar-body" id="activity-stream"></div>
       </div>
     </div>
   </div>
 
-  <script>
-    var agents = ${JSON.stringify(AGENTS)};
-    var lastStreamLength = 0;
-    var agentActivity = {};
-    agents.forEach(function(a) { agentActivity[a.id] = []; });
+  <!-- Leads -->
+  <div class="tab-content" id="tab-leads">
+    <div class="pipeline-row" id="pipeline-row"></div>
+    <div class="leads-grid" id="leads-grid"></div>
+  </div>
 
-    async function fetchStatus() {
-      try {
-        var res = await fetch('/api/status');
-        var data = await res.json();
-        renderInfra(data);
-        renderAgents(data.agents);
-      } catch(e) {}
-    }
+  <!-- Outreach -->
+  <div class="tab-content" id="tab-outreach">
+    <div class="section-title">Drafts <span class="count" id="drafts-count"></span></div>
+    <div class="email-list" id="drafts-list"></div>
+    <div class="section-title">Approved <span class="count" id="approved-count"></span></div>
+    <div class="email-list" id="approved-list"></div>
+  </div>
 
-    async function fetchStream() {
-      try {
-        var res = await fetch('/api/stream?since=' + lastStreamLength);
-        var data = await res.json();
-        if (data.events && data.events.length > 0) {
-          data.events.forEach(function(ev) {
-            if (!agentActivity[ev.agentId]) agentActivity[ev.agentId] = [];
-            agentActivity[ev.agentId].push(ev.ts);
-            if (agentActivity[ev.agentId].length > 30) agentActivity[ev.agentId].shift();
-          });
-          renderStream(data.events, data.total);
-          lastStreamLength = data.total;
-        }
-        if (data.commits) renderCommits(data.commits);
-      } catch(e) {}
-    }
+  <!-- Assets -->
+  <div class="tab-content" id="tab-assets">
+    <div class="assets-grid" id="assets-grid"></div>
+  </div>
 
-    async function fetchPipeline() {
-      try {
-        var res = await fetch('/api/pipeline');
-        var data = await res.json();
-        renderPipeline(data);
-      } catch(e) {}
-    }
+  <!-- QA -->
+  <div class="tab-content" id="tab-qa">
+    <div class="qa-stats-row" id="qa-stats"></div>
+    <div class="qa-list" id="qa-list"></div>
+  </div>
 
-    async function fetchOutreach() {
-      try {
-        var res = await fetch('/api/outreach');
-        var data = await res.json();
-        renderOutreach(data);
-      } catch(e) {}
-    }
+</div>
 
-    async function fetchQaReviews() {
-      try {
-        var res = await fetch('/api/qa-reviews');
-        var data = await res.json();
-        renderQaReviews(data);
-      } catch(e) {}
-    }
-
-    async function fetchProspects() {
-      try {
-        var res = await fetch('/api/prospects');
-        var data = await res.json();
-        renderProspects(data);
-      } catch(e) {}
-    }
-
-    function renderInfra(data) {
-      var running = data.agents.filter(function(a){ return a.status === 'running'; }).length;
-      var items = [
-        { name: 'tmux', on: data.session },
-        { name: 'Prospects: ' + data.prospectCount, on: data.prospectCount > 0 },
-        { name: 'Drafts: ' + data.draftCount, on: data.draftCount > 0 },
-        { name: 'Approved: ' + data.approvedCount, on: data.approvedCount > 0 },
-        { name: 'Assets: ' + data.assetCount, on: data.assetCount > 0 },
-      ];
-      document.getElementById('infraDots').innerHTML =
-        items.map(function(it) {
-          return '<div class="infra-dot"><div class="idot ' + (it.on ? 'on' : 'off') + '"></div>' + it.name + '</div>';
-        }).join('') +
-        '<div class="infra-dot" style="color:#888;font-weight:600">' + running + '/' + data.agents.length + ' agents</div>';
-    }
-
-    function makeCubes(status) {
-      var cubes = '';
-      for (var i = 0; i < 16; i++) {
-        cubes += '<div class="cube"></div>';
-      }
-      return '<div class="cubes-row ' + status + '">' + cubes + '</div>';
-    }
-
-    function renderAgents(agentStatuses) {
-      var html = '';
-      var avatars = { 1: 'M', 2: 'O1', 3: 'O2', 4: 'O3', 5: 'QA' };
-      agents.forEach(function(agent, i) {
-        var s = agentStatuses[i] || { status: 'offline', output: '' };
-        var output = (s.output || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-        var lastLines = output.split('\\n').filter(function(l){ return l.trim(); }).slice(-5).join('\\n');
-        var extraClass = agent.id === 1 ? ' mgr' : (agent.id === 5 ? ' qa' : '');
-        html +=
-          '<div class="agent-box ' + s.status + extraClass + '">' +
-            '<div class="box-top">' +
-              '<div class="box-identity">' +
-                '<div class="box-avatar" style="color:' + agent.color + '">' + avatars[agent.id] + '</div>' +
-                '<div>' +
-                  '<div class="box-name" style="color:' + agent.color + '">' + agent.name + '</div>' +
-                  '<div class="box-role">' + agent.role + '</div>' +
-                '</div>' +
-              '</div>' +
-              '<div class="box-status ' + s.status + '">' + s.status + '</div>' +
-            '</div>' +
-            makeCubes(s.status === 'running' ? 'scanning' : s.status) +
-            '<div class="box-terminal">' + (lastLines || 'No output yet') + '</div>' +
-          '</div>';
-      });
-      document.getElementById('agentGrid').innerHTML = html;
-    }
-
-    function timeAgo(ts) {
-      var sec = Math.floor((Date.now() / 1000) - ts);
-      if (sec < 0) sec = 0;
-      if (sec < 60) return sec + 's ago';
-      if (sec < 3600) return Math.floor(sec / 60) + 'm ago';
-      if (sec < 86400) return Math.floor(sec / 3600) + 'h ago';
-      return Math.floor(sec / 86400) + 'd ago';
-    }
-
-    function renderPipeline(data) {
-      var badge = document.getElementById('buildBadge');
-      var stats = document.getElementById('buildStats');
-      var el = document.getElementById('buildEvents');
-
-      var total = data.prospects + data.drafts + data.approved + data.assets;
-      if (total === 0) {
-        badge.innerHTML = '<div class="build-dot none"></div><span style="color:#555">No activity</span>';
-        stats.innerHTML = '';
-        return;
-      }
-
-      var dotClass = data.approved > 0 ? 'pass' : (data.drafts > 0 ? 'none' : 'none');
-      var statusText = data.approved > 0 ? 'ACTIVE' : 'WARMING UP';
-      var statusColor = data.approved > 0 ? '#5a5' : '#da5';
-      badge.innerHTML = '<div class="build-dot ' + dotClass + '"></div><span style="color:' + statusColor + '">' + statusText + '</span>';
-
-      stats.innerHTML =
-        '<div>Prospects: <span class="stat-val">' + data.prospects + '</span></div>' +
-        '<div>Drafts: <span class="stat-val">' + data.drafts + '</span></div>' +
-        '<div>Approved: <span class="stat-val">' + data.approved + '</span></div>' +
-        '<div>Assets: <span class="stat-val">' + data.assets + '</span></div>';
-      stats.style.marginBottom = '10px';
-
-      if (data.events.length === 0) return;
-      var html = '';
-      data.events.forEach(function(ev) {
-        var icon = ev.type === 'prospect' ? '&#x25C6;' : (ev.type === 'approved' ? '&#x2713;' : '&#x2709;');
-        var msg = (ev.msg || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-        var company = (ev.company || '').replace(/</g, '&lt;');
-        if (company.length > 20) company = company.substring(0, 20) + '...';
-        html +=
-          '<div class="build-ev ' + ev.type + '">' +
-            '<div class="build-icon">' + icon + '</div>' +
-            '<div class="build-sha">' + company + '</div>' +
-            '<div class="build-msg">' + msg + '</div>' +
-            '<div class="build-time">' + timeAgo(ev.ts) + '</div>' +
-          '</div>';
-      });
-      el.innerHTML = html;
-    }
-
-    var allStreamEvents = [];
-    var MAX_STREAM = 100;
-
-    function renderStream(events, total) {
-      for (var i = 0; i < events.length; i++) {
-        allStreamEvents.unshift(events[i]);
-      }
-      while (allStreamEvents.length > MAX_STREAM) allStreamEvents.pop();
-
-      var body = document.getElementById('streamBody');
-      var html = '';
-      for (var i = 0; i < allStreamEvents.length; i++) {
-        var ev = allStreamEvents[i];
-        var t = new Date(ev.ts);
-        var ts = t.getFullYear() + '-' +
-          String(t.getMonth()+1).padStart(2,'0') + '-' +
-          String(t.getDate()).padStart(2,'0') + ' ' +
-          String(t.getHours()).padStart(2,'0') + ':' +
-          String(t.getMinutes()).padStart(2,'0') + ':' +
-          String(t.getSeconds()).padStart(2,'0');
-        var text = ev.text.replace(/</g, '&lt;').replace(/>/g, '&gt;');
-        var hi = text.includes('prospect') || text.includes('email') || text.includes('Error') || text.includes('Created') || text.includes('Updated') || text.includes('approved') || text.includes('PASS') || text.includes('done') || text.includes('found');
-        html += '<div class="ev">' +
-          '<div class="ev-top">' +
-            '<span class="ev-tag" style="color:' + ev.color + '">' + ev.agentName + '</span>' +
-            '<span class="ev-time">' + ts + '</span>' +
-          '</div>' +
-          '<div class="ev-msg' + (hi ? ' hi' : '') + '">' + text + '</div>' +
-        '</div>';
-      }
-      body.innerHTML = html || '<div style="padding:24px;color:#333;font-size:12px;text-align:center">Waiting for activity...</div>';
-    }
-
-    function renderCommits(commits) {
-      var el = document.getElementById('gitLog');
-      if (!commits || !commits.length) { el.innerHTML = '<span style="color:#333">No commits yet</span>'; return; }
-      el.innerHTML = commits.map(function(c) {
-        var parts = c.split('|');
-        var sha = parts[0] || '';
-        var dateStr = parts[1] || '';
-        var msg = parts.slice(2).join('|') || '';
-        var dt = '';
-        if (dateStr) {
-          var d = new Date(dateStr.trim());
-          if (!isNaN(d.getTime())) {
-            var months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-            dt = months[d.getMonth()] + ' ' +
-              String(d.getDate()).padStart(2,'0') + ' ' +
-              String(d.getHours()).padStart(2,'0') + ':' +
-              String(d.getMinutes()).padStart(2,'0');
-          }
-        }
-        return '<div class="gc"><span class="gh">' + sha + '</span> <span style="color:#555">' + dt + '</span> ' + msg + '</div>';
-      }).join('');
-    }
-
-    function renderOutreach(data) {
-      var el = document.getElementById('reviewEvents');
-      if (!data.emails || data.emails.length === 0) return;
-      var html = '';
-      data.emails.forEach(function(r) {
-        var body = (r.body || r.preview || '').replace(/\\|/g, '\\n').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-        var status = (r.status || 'draft').toUpperCase();
-        html +=
-          '<div class="review-ev" onclick="this.classList.toggle(&quot;expanded&quot;)">' +
-            '<div class="review-top">' +
-              '<span class="review-verdict ' + status + '">' + status + '</span>' +
-              '<span class="review-sha">' + (r.company || r.to || '').substring(0,20) + '</span>' +
-              '<span class="review-msg">' + (r.subject || r.msg || '').replace(/</g, '&lt;') + '</span>' +
-              '<span class="review-time">' + (r.createdBy || '') + '</span>' +
-            '</div>' +
-            '<div class="review-body">' + body + '</div>' +
-          '</div>';
-      });
-      el.innerHTML = html;
-    }
-
-    function renderQaReviews(data) {
-      var el = document.getElementById('qaEvents');
-      if (!data.reviews || data.reviews.length === 0) return;
-      var html = '';
-      data.reviews.forEach(function(r) {
-        var feedback = (r.feedback || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-        var verdict = (r.verdict || 'PASS').toUpperCase();
-        var item = (r.item || '').replace(/</g, '&lt;');
-        html +=
-          '<div class="qa-ev" onclick="this.classList.toggle(&quot;expanded&quot;)">' +
-            '<div class="qa-top">' +
-              '<span class="qa-verdict ' + verdict + '">' + verdict + '</span>' +
-              '<span class="qa-item">' + item.substring(0, 30) + '</span>' +
-              '<span class="qa-feedback">' + feedback.substring(0, 80) + '</span>' +
-              '<span class="qa-time">' + (r.timestamp || '') + '</span>' +
-            '</div>' +
-            '<div class="qa-body">' + feedback + '</div>' +
-          '</div>';
-      });
-      el.innerHTML = html;
-    }
-
-    function renderProspects(data) {
-      var el = document.getElementById('alertEvents');
-      if (!data.prospects || data.prospects.length === 0) return;
-      var html = '';
-      data.prospects.forEach(function(a) {
-        var details = (a.notes || '').replace(/\\|/g, '\\n').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-        var summary = (a.company || a.name || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-        var country = (a.country || 'NEW').toUpperCase();
-        var temp = country.length <= 4 ? country : 'NEW';
-        html +=
-          '<div class="alert-ev" onclick="this.classList.toggle(&quot;expanded&quot;)">' +
-            '<div class="alert-top">' +
-              '<span class="alert-severity NEW">' + (a.country || 'NEW') + '</span>' +
-              '<span class="alert-summary">' + summary + ' — ' + (a.locations || '?') + ' locations</span>' +
-              '<span class="alert-count">' + (a.addedBy || '') + '</span>' +
-              '<span class="alert-time">' + (a.timestamp || '') + '</span>' +
-            '</div>' +
-            '<div class="alert-body">' + details + '\\nBrands: ' + (Array.isArray(a.brands) ? a.brands.join(', ') : (a.brands || '')) + '</div>' +
-          '</div>';
-      });
-      el.innerHTML = html;
-    }
-
-    fetchStatus();
-    fetchStream();
-    fetchPipeline();
-    fetchOutreach();
-    fetchQaReviews();
-    fetchProspects();
-    setInterval(fetchStatus, 5000);
-    setInterval(fetchStream, 3000);
-    setInterval(fetchPipeline, 5000);
-    setInterval(fetchOutreach, 8000);
-    setInterval(fetchQaReviews, 8000);
-    setInterval(fetchProspects, 10000);
-  </script>
-</body>
-</html>`);
-});
-
-// Status API
-app.get("/api/status", (_req, res) => {
-  const session = sessionExists();
-
-  const prospectCount = countLines(PROSPECTS_LOG);
-  const draftCount = countLines(OUTREACH_DRAFT_LOG);
-  const approvedCount = countLines(OUTREACH_APPROVED_LOG);
-  const assetCount = countLines(ASSETS_LOG);
-
-  const agents = AGENTS.map((agent) => ({
-    id: agent.id, name: agent.name,
-    status: session ? getAgentStatus(agent.windowIdx) : "offline",
-    output: session ? getAgentOutput(agent.windowIdx) : "",
-  }));
-  res.json({ session, prospectCount, draftCount, approvedCount, assetCount, agents });
-});
-
-// Campaign pipeline API
-app.get("/api/pipeline", (_req, res) => {
-  const stats = getPipelineStats();
-  res.json(stats);
-});
-
-// Outreach emails API — shows both drafts and approved
-app.get("/api/outreach", (_req, res) => {
-  const drafts = readJsonl(OUTREACH_DRAFT_LOG, 15);
-  const approved = readJsonl(OUTREACH_APPROVED_LOG, 15);
-  // Merge and sort by timestamp
-  const all = [...drafts, ...approved].sort((a, b) => {
-    const ta = a.timestamp || "";
-    const tb = b.timestamp || "";
-    return tb.localeCompare(ta);
+<script>
+(function(){
+  // ========== Tab Switching ==========
+  document.querySelectorAll('.tab').forEach(function(tab){
+    tab.addEventListener('click', function(){
+      document.querySelectorAll('.tab').forEach(function(t){t.classList.remove('active')});
+      document.querySelectorAll('.tab-content').forEach(function(tc){tc.classList.remove('active')});
+      tab.classList.add('active');
+      document.getElementById('tab-' + tab.dataset.tab).classList.add('active');
+    });
   });
-  res.json({ emails: all.slice(0, 20) });
-});
 
-// QA Reviews API
-app.get("/api/qa-reviews", (_req, res) => {
-  const reviews = readJsonl(QA_REVIEWS_LOG, 20);
-  res.json({ reviews });
-});
+  // ========== Country Flags ==========
+  var FLAGS = {
+    DE:'\\u{1F1E9}\\u{1F1EA}',GERMANY:'\\u{1F1E9}\\u{1F1EA}',
+    CH:'\\u{1F1E8}\\u{1F1ED}',SWITZERLAND:'\\u{1F1E8}\\u{1F1ED}',
+    AT:'\\u{1F1E6}\\u{1F1F9}',AUSTRIA:'\\u{1F1E6}\\u{1F1F9}',
+    UK:'\\u{1F1EC}\\u{1F1E7}',GB:'\\u{1F1EC}\\u{1F1E7}','UNITED KINGDOM':'\\u{1F1EC}\\u{1F1E7}',
+    FR:'\\u{1F1EB}\\u{1F1F7}',FRANCE:'\\u{1F1EB}\\u{1F1F7}',
+    NL:'\\u{1F1F3}\\u{1F1F1}',NETHERLANDS:'\\u{1F1F3}\\u{1F1F1}',
+    US:'\\u{1F1FA}\\u{1F1F8}',IT:'\\u{1F1EE}\\u{1F1F9}',
+    ES:'\\u{1F1EA}\\u{1F1F8}',BE:'\\u{1F1E7}\\u{1F1EA}',
+    LU:'\\u{1F1F1}\\u{1F1FA}',PL:'\\u{1F1F5}\\u{1F1F1}',
+    CZ:'\\u{1F1E8}\\u{1F1FF}',SE:'\\u{1F1F8}\\u{1F1EA}',
+    DK:'\\u{1F1E9}\\u{1F1F0}',NO:'\\u{1F1F3}\\u{1F1F4}',
+    FI:'\\u{1F1EB}\\u{1F1EE}',IE:'\\u{1F1EE}\\u{1F1EA}'
+  };
+  function flag(c){if(!c)return'\\u{1F30D}';return FLAGS[c.toUpperCase().trim()]||'\\u{1F30D}';}
 
-// Prospects API
-app.get("/api/prospects", (_req, res) => {
-  const prospects = readJsonl(PROSPECTS_LOG, 20);
-  res.json({ prospects });
-});
-
-// Activity stream API
-app.get("/api/stream", (req, res) => {
-  const since = parseInt(req.query.since as string) || 0;
-  const events = activityStream.slice(since);
-  const commits = getRecentCommits(15);
-  res.json({ events, total: activityStream.length, commits });
-});
-
-// Launch agent
-app.post("/api/agent/:id/launch", (req, res) => {
-  const id = parseInt(req.params.id);
-  const agent = AGENTS.find((a) => a.id === id);
-  if (!agent) return res.status(404).json({ error: "Agent not found" });
-  try {
-    const claudeBin = `/usr/local/bin/claude`;
-    const model = "claude-sonnet-4-20250514";
-    execSync(`tmux send-keys -t ${SESSION}:${agent.windowIdx} '${claudeBin} --model ${model}' Enter`, { stdio: "pipe" });
-    res.json({ ok: true });
-  } catch (err) {
-    res.json({ ok: false, error: err instanceof Error ? err.message : String(err) });
+  // ========== Asset Icons ==========
+  function assetIcon(type){
+    var m={'one-pager':'\\u{1F4C4}','linkedin-post':'\\u{1F4F1}','presentation':'\\u{1F4CA}','landing-page':'\\u{1F310}'};
+    return m[type]||'\\u{1F4C4}';
   }
-});
 
-// Send custom message to agent
-app.post("/api/agent/:id/send", (req, res) => {
-  const id = parseInt(req.params.id);
-  const agent = AGENTS.find((a) => a.id === id);
-  if (!agent) return res.status(404).json({ error: "Agent not found" });
-  const message = req.body.message as string;
-  if (!message) return res.status(400).json({ error: "message required" });
-  try {
-    const fs = require("fs");
-    const tmpFile = `/tmp/agent-msg-${agent.id}.txt`;
-    fs.writeFileSync(tmpFile, message);
-    execSync(`tmux load-buffer ${tmpFile} && tmux paste-buffer -t ${SESSION}:${agent.windowIdx}`, { stdio: "pipe" });
-    execSync(`tmux send-keys -t ${SESSION}:${agent.windowIdx} '' Enter`, { stdio: "pipe" });
-    res.json({ ok: true });
-  } catch (err) {
-    res.json({ ok: false, error: err instanceof Error ? err.message : String(err) });
+  // ========== HTML Escape ==========
+  function esc(s){
+    if(s===null||s===undefined)return'';
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   }
+
+  // ========== KITT Scanner Animation ==========
+  var kittPos = {};
+  var kittDir = {};
+  function updateKitt(){
+    document.querySelectorAll('.kitt-row').forEach(function(row){
+      var id = row.dataset.agentId;
+      var color = row.dataset.color;
+      var isActive = row.dataset.status === 'active';
+      if(kittPos[id]===undefined){kittPos[id]=0;kittDir[id]=1;}
+      if(isActive){
+        kittPos[id]+=kittDir[id];
+        if(kittPos[id]>=15)kittDir[id]=-1;
+        if(kittPos[id]<=0)kittDir[id]=1;
+      }
+      var cells = row.querySelectorAll('.kitt-cell');
+      for(var i=0;i<cells.length;i++){
+        var dist = Math.abs(i - kittPos[id]);
+        if(!isActive){
+          cells[i].style.background='rgba(255,255,255,.03)';
+          cells[i].style.boxShadow='none';
+          cells[i].style.opacity='1';
+          continue;
+        }
+        if(dist===0){
+          cells[i].style.background=color;
+          cells[i].style.boxShadow='0 0 8px '+color+',0 0 2px '+color;
+          cells[i].style.opacity='1';
+        }else if(dist===1){
+          cells[i].style.background=color;
+          cells[i].style.boxShadow='0 0 4px '+color;
+          cells[i].style.opacity='0.5';
+        }else if(dist===2){
+          cells[i].style.background=color;
+          cells[i].style.boxShadow='none';
+          cells[i].style.opacity='0.2';
+        }else if(dist===3){
+          cells[i].style.background=color;
+          cells[i].style.boxShadow='none';
+          cells[i].style.opacity='0.08';
+        }else{
+          cells[i].style.background='rgba(255,255,255,.03)';
+          cells[i].style.boxShadow='none';
+          cells[i].style.opacity='1';
+        }
+      }
+    });
+  }
+  setInterval(updateKitt, 75);
+
+  // ========== RENDER: Mission Control ==========
+  function renderAgents(agents){
+    var grid = document.getElementById('agent-grid');
+    var html = '';
+    for(var a=0;a<agents.length;a++){
+      var ag = agents[a];
+      var initials = ag.name.charAt(0);
+      var sc = ag.status==='active'?'status-active':'status-idle';
+      var kittCells = '';
+      for(var k=0;k<16;k++) kittCells+='<div class="kitt-cell"></div>';
+      var termLines = '';
+      var tl = ag.terminalLines||[];
+      for(var t=0;t<tl.length;t++) termLines+='<div class="term-line">'+esc(tl[t])+'</div>';
+      if(!termLines) termLines='<div class="term-line" style="color:var(--text3)">[waiting...]</div>';
+
+      html+='<div class="agent-card">'+
+        '<div class="agent-header">'+
+          '<div class="agent-avatar" style="background:'+ag.color+'">'+esc(initials)+'</div>'+
+          '<div class="agent-info"><div class="agent-name">'+esc(ag.name)+'</div><div class="agent-role">'+esc(ag.role)+'</div></div>'+
+          '<span class="status-badge '+sc+'">'+ag.status+'</span>'+
+        '</div>'+
+        '<div class="kitt-row" data-agent-id="'+ag.id+'" data-color="'+ag.color+'" data-status="'+ag.status+'">'+kittCells+'</div>'+
+        '<div class="term-preview">'+termLines+'</div>'+
+      '</div>';
+    }
+    grid.innerHTML = html;
+  }
+
+  function renderStream(data){
+    var el = document.getElementById('activity-stream');
+    var commits = data.commits||[];
+    if(!commits.length){
+      el.innerHTML='<div class="empty-state">Waiting for activity...</div>';
+      return;
+    }
+    var html='';
+    for(var i=0;i<commits.length;i++){
+      var c=commits[i];
+      html+='<div class="commit-item">'+
+        '<span class="commit-hash">'+esc(c.hash)+'</span>'+
+        '<div class="commit-msg">'+esc(c.message)+'</div>'+
+        '<div class="commit-meta">'+esc(c.author)+' \\u00b7 '+esc(c.relative)+'</div>'+
+      '</div>';
+    }
+    el.innerHTML=html;
+  }
+
+  // ========== RENDER: Leads ==========
+  function renderLeads(leads){
+    // Pipeline counts
+    var byCountry={};
+    for(var i=0;i<leads.length;i++){
+      var cc=(leads[i].country||'').toUpperCase().trim();
+      byCountry[cc]=(byCountry[cc]||0)+1;
+    }
+    var deCount=(byCountry['DE']||0)+(byCountry['GERMANY']||0);
+    var chCount=(byCountry['CH']||0)+(byCountry['SWITZERLAND']||0);
+    var ukCount=(byCountry['UK']||0)+(byCountry['GB']||0)+(byCountry['UNITED KINGDOM']||0);
+    var otherCount=leads.length-deCount-chCount-ukCount;
+
+    var pRow=document.getElementById('pipeline-row');
+    var buckets=[
+      {n:leads.length,l:'Total Prospects'},
+      {n:deCount,l:'Germany'},
+      {n:chCount,l:'Switzerland'},
+      {n:ukCount,l:'UK'},
+      {n:Math.max(0,otherCount),l:'Other'}
+    ];
+    var pHtml='';
+    for(var b=0;b<buckets.length;b++){
+      pHtml+='<div class="pipeline-card"><div class="pipeline-num">'+buckets[b].n+'</div><div class="pipeline-label">'+buckets[b].l+'</div></div>';
+    }
+    pRow.innerHTML=pHtml;
+
+    // Lead cards
+    var now=Date.now();
+    var grid=document.getElementById('leads-grid');
+    var html='';
+    for(var i=0;i<leads.length;i++){
+      var l=leads[i];
+      var isRecent=l.timestamp&&(now-new Date(l.timestamp).getTime())<300000;
+      var brands='';
+      if(l.brands&&l.brands.length){
+        brands='<div class="lead-brands">';
+        for(var j=0;j<l.brands.length;j++) brands+='<span class="brand-badge">'+esc(l.brands[j])+'</span>';
+        brands+='</div>';
+      }
+      var contacts='';
+      if(l.contacts&&l.contacts.length){
+        contacts='<div class="lead-contacts">';
+        for(var j=0;j<l.contacts.length;j++){
+          var ct=l.contacts[j];
+          contacts+='<div class="contact-line"><span class="contact-name">'+esc(ct.name)+'</span>'+(ct.title?' \\u2014 '+esc(ct.title):'')+(ct.email?' \\u00b7 '+esc(ct.email):'')+'</div>';
+        }
+        contacts+='</div>';
+      }
+      html+='<div class="lead-card'+(isRecent?' recent':'')+'">'+
+        '<div class="lead-company">'+esc(l.company)+'</div>'+
+        '<div class="lead-country">'+flag(l.country)+' '+esc(l.country)+(l.locations?' \\u00b7 '+l.locations+' locations':'')+'</div>'+
+        brands+
+        '<div class="lead-meta">'+(l.website?'<a href="'+esc(l.website)+'" target="_blank" rel="noopener">'+esc(l.website)+'</a>':'')+'</div>'+
+        contacts+
+        (l.notes?'<div class="lead-notes">'+esc(l.notes)+'</div>':'')+
+      '</div>';
+    }
+    grid.innerHTML=html||'<div class="empty-state">No prospects yet</div>';
+  }
+
+  // ========== RENDER: Outreach ==========
+  function renderOutreach(data){
+    var drafts=data.drafts||[];
+    var approved=data.approved||[];
+    document.getElementById('drafts-count').textContent='('+drafts.length+')';
+    document.getElementById('approved-count').textContent='('+approved.length+')';
+
+    function emailCard(e,statusClass,statusLabel){
+      var preview=(e.body||'').slice(0,200)+((e.body||'').length>200?'...':'');
+      return '<div class="email-card" onclick="this.classList.toggle(\\x27expanded\\x27)">'+
+        '<div class="email-top">'+
+          '<div>'+
+            '<div class="email-addr">From: viktor@salesteq.com</div>'+
+            '<div class="email-addr">To: '+esc(e.to)+'</div>'+
+          '</div>'+
+          '<span class="outreach-status '+statusClass+'">'+statusLabel+'</span>'+
+        '</div>'+
+        '<div class="email-subject">'+esc(e.subject)+'</div>'+
+        '<div class="email-preview">'+esc(preview)+'</div>'+
+        '<div class="email-full">'+esc(e.body)+'</div>'+
+        '<div class="email-timestamp">'+esc(e.timestamp||'')+(e.company?' \\u00b7 '+esc(e.company):'')+'</div>'+
+      '</div>';
+    }
+
+    var dHtml='';
+    for(var i=0;i<drafts.length;i++) dHtml+=emailCard(drafts[i],'outreach-draft','DRAFT');
+    document.getElementById('drafts-list').innerHTML=dHtml||'<div class="empty-state">No drafts yet</div>';
+
+    var aHtml='';
+    for(var i=0;i<approved.length;i++){
+      var st=approved[i].status;
+      var cls=st==='sent'?'outreach-sent':'outreach-approved';
+      var lbl=st==='sent'?'SENT':'APPROVED';
+      aHtml+=emailCard(approved[i],cls,lbl);
+    }
+    document.getElementById('approved-list').innerHTML=aHtml||'<div class="empty-state">No approved emails yet</div>';
+  }
+
+  // ========== RENDER: Assets ==========
+  function renderAssets(assets){
+    var grid=document.getElementById('assets-grid');
+    if(!assets.length){grid.innerHTML='<div class="empty-state">No assets generated yet</div>';return;}
+    var html='';
+    for(var i=0;i<assets.length;i++){
+      var a=assets[i];
+      var preview=(a.content||'').slice(0,200)+((a.content||'').length>200?'...':'');
+      var landingLink=a.type==='landing-page'?'<div style="margin-top:10px"><a href="/landing/" target="_blank">View Landing Page \\u2192</a></div>':'';
+      html+='<div class="asset-card" onclick="this.classList.toggle(\\x27expanded\\x27)">'+
+        '<div class="asset-icon">'+assetIcon(a.type)+'</div>'+
+        '<div class="asset-title">'+esc(a.title)+'</div>'+
+        '<div class="asset-type">'+esc(a.type)+'</div>'+
+        '<div class="asset-preview">'+esc(preview)+'</div>'+
+        '<div class="asset-full">'+esc(a.content)+landingLink+'</div>'+
+      '</div>';
+    }
+    grid.innerHTML=html;
+  }
+
+  // ========== RENDER: QA ==========
+  function renderQA(reviews){
+    var total=reviews.length;
+    var passed=0,flagged=0;
+    for(var i=0;i<reviews.length;i++){
+      if(reviews[i].verdict==='PASS')passed++;
+      else flagged++;
+    }
+
+    document.getElementById('qa-stats').innerHTML=
+      '<div class="qa-stat"><div class="qa-stat-num" style="color:var(--text)">'+total+'</div><div class="qa-stat-label">Reviewed</div></div>'+
+      '<div class="qa-stat"><div class="qa-stat-num" style="color:var(--green)">'+passed+'</div><div class="qa-stat-label">Passed</div></div>'+
+      '<div class="qa-stat"><div class="qa-stat-num" style="color:var(--amber)">'+flagged+'</div><div class="qa-stat-label">Flagged</div></div>';
+
+    if(!reviews.length){
+      document.getElementById('qa-list').innerHTML='<div class="empty-state">No QA reviews yet</div>';
+      return;
+    }
+    var html='';
+    for(var i=0;i<reviews.length;i++){
+      var r=reviews[i];
+      var isPass=r.verdict==='PASS';
+      var ts=r.ts?new Date(r.ts).toLocaleString():'';
+      html+='<div class="qa-card" onclick="this.classList.toggle(\\x27expanded\\x27)">'+
+        '<div class="qa-top">'+
+          '<div><div class="qa-company">'+esc(r.company)+'</div><div class="qa-type">'+esc(r.type)+'</div></div>'+
+          '<div style="display:flex;align-items:center;gap:12px">'+
+            '<span class="qa-ts">'+esc(ts)+'</span>'+
+            '<span class="verdict '+(isPass?'verdict-pass':'verdict-attention')+'">'+esc(r.verdict)+'</span>'+
+          '</div>'+
+        '</div>'+
+        '<div class="qa-review-text">'+esc(r.review)+'</div>'+
+      '</div>';
+    }
+    document.getElementById('qa-list').innerHTML=html;
+  }
+
+  // ========== DATA FETCHING ==========
+  function fetchAll(){
+    Promise.all([
+      fetch('/api/status').then(function(r){return r.json()}),
+      fetch('/api/stream').then(function(r){return r.json()}),
+      fetch('/api/leads').then(function(r){return r.json()}),
+      fetch('/api/outreach').then(function(r){return r.json()}),
+      fetch('/api/assets').then(function(r){return r.json()}),
+      fetch('/api/qa').then(function(r){return r.json()})
+    ]).then(function(results){
+      var status=results[0],stream=results[1],leads=results[2],outreach=results[3],assets=results[4],qa=results[5];
+
+      // Badges
+      document.getElementById('badge-leads').textContent=status.counts.leads;
+      document.getElementById('badge-outreach').textContent=status.counts.outreach;
+      document.getElementById('badge-assets').textContent=status.counts.assets;
+      document.getElementById('badge-qa').textContent=status.counts.qa;
+      document.getElementById('agent-count').textContent=status.activeCount+'/'+status.totalCount+' active';
+
+      renderAgents(status.agents);
+      renderStream(stream);
+      renderLeads(leads);
+      renderOutreach(outreach);
+      renderAssets(assets);
+      renderQA(qa);
+    }).catch(function(e){
+      console.error('Dashboard fetch error:',e);
+    });
+  }
+
+  // Initial load + auto-refresh
+  fetchAll();
+  setInterval(fetchAll, 4000);
+})();
+</script>
+</body>
+</html>`;
+}
+
+// ── Admin Routes ──
+app.use(express.json());
+
+app.post("/api/admin/kill-agents", (_req, res) => {
+  try { execSync(`tmux kill-session -t ${TMUX_SESSION} 2>/dev/null`, { stdio: "pipe" }); res.json({ ok: true, message: "All agents killed" }); } catch { res.json({ ok: true, message: "No session to kill" }); }
 });
 
-const PORT = 3001;
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(`Commercial Ops Control Panel running at http://0.0.0.0:${PORT}`);
+app.post("/api/admin/wipe-data", (_req, res) => {
+  try {
+    execSync(`rm -f ${DATA_DIR}/*.jsonl ${DATA_DIR}/.qa-reviewed 2>/dev/null; mkdir -p ${DATA_DIR}`, { stdio: "pipe" });
+    try { execSync(`cp /root/commercial-ops/data/seed-prospects.jsonl ${DATA_DIR}/prospects.jsonl 2>/dev/null`, { stdio: "pipe" }); } catch {}
+    execSync(`touch ${DATA_DIR}/outreach-draft.jsonl ${DATA_DIR}/outreach-approved.jsonl ${DATA_DIR}/assets.jsonl ${DATA_DIR}/qa-reviews.jsonl ${DATA_DIR}/qa-feedback.jsonl`, { stdio: "pipe" });
+    try { execSync(`cd /root/commercial-ops && git checkout -- STATUS.md 2>/dev/null`, { stdio: "pipe" }); } catch {}
+    res.json({ ok: true, message: "Data wiped, prospects re-seeded" });
+  } catch (e) { res.json({ ok: false, error: String(e) }); }
+});
+
+app.post("/api/admin/clear-sessions", (_req, res) => {
+  try {
+    execSync(`rm -rf /root/.claude/sessions /root/.claude/projects /root/.claude/cache /root/commercial-ops/.claude/sessions /root/commercial-ops/.claude/projects 2>/dev/null`, { stdio: "pipe" });
+    res.json({ ok: true, message: "Claude sessions cleared" });
+  } catch (e) { res.json({ ok: false, error: String(e) }); }
+});
+
+app.post("/api/admin/launch-agents", (_req, res) => {
+  res.json({ ok: true, message: "Agents launching (~70s). Dashboard will restart in tmux window 5." });
+  const { spawn } = require("child_process");
+  const child = spawn("bash", ["start-agents.sh"], {
+    cwd: "/root/commercial-ops",
+    env: { ...process.env, SKIP_DASHBOARD_KILL: "1" },
+    detached: true,
+    stdio: ["ignore", fs.openSync("/tmp/agent-launch.log", "w"), fs.openSync("/tmp/agent-launch.log", "w")],
+  });
+  child.unref();
+});
+
+app.get("/api/admin/stats", (_req, res) => {
+  try {
+    const mem = execSync(`free -h | head -3`, { stdio: "pipe" }).toString().trim();
+    const load = execSync(`uptime`, { stdio: "pipe" }).toString().trim();
+    const tmux = (() => { try { return execSync(`tmux list-windows -t ${TMUX_SESSION} 2>/dev/null`, { stdio: "pipe" }).toString().trim(); } catch { return "No session"; } })();
+    const dataFiles = (() => { try { return execSync(`wc -l ${DATA_DIR}/*.jsonl 2>/dev/null`, { stdio: "pipe" }).toString().trim(); } catch { return "No data"; } })();
+    res.json({ mem, load, tmux, dataFiles });
+  } catch (e) { res.json({ error: String(e) }); }
+});
+
+app.get("/admin", (_req, res) => {
+  res.send(`<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Demo Admin</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}body{font-family:-apple-system,BlinkMacSystemFont,'SF Pro',sans-serif;background:#111;color:#ccc;padding:40px}
+h1{font-size:20px;color:#e8720c;margin-bottom:30px}.section{margin-bottom:30px}.section h2{font-size:13px;color:#666;text-transform:uppercase;letter-spacing:1px;margin-bottom:12px}
+.btn-row{display:flex;gap:10px;flex-wrap:wrap}.btn{padding:12px 24px;border:1px solid #333;border-radius:8px;background:#1a1a1a;color:#ccc;font-size:13px;font-weight:600;cursor:pointer;transition:all 0.15s}
+.btn:hover{border-color:#555;background:#222}.btn.danger{border-color:#a33;color:#e55}.btn.danger:hover{background:#2a1515;border-color:#c44}
+.btn.success{border-color:#3a3;color:#5c5}.btn.success:hover{background:#152a15;border-color:#4c4}.btn.warn{border-color:#a83;color:#da5}.btn.warn:hover{background:#2a2515;border-color:#cb4}
+.status-box{background:#1a1a1a;border:1px solid #252525;border-radius:8px;padding:16px;font-family:'SF Mono',monospace;font-size:11px;line-height:1.6;color:#777;white-space:pre-wrap;max-height:200px;overflow-y:auto;margin-top:12px}
+.log{margin-top:12px;color:#555;font-size:12px;font-style:italic}.links{margin-top:30px}.links a{color:#e8720c;text-decoration:none;margin-right:20px;font-size:13px}.links a:hover{color:#f90}
+</style></head><body>
+<h1>Demo Admin</h1>
+<div class="section"><h2>Agent Control</h2><div class="btn-row">
+<button class="btn success" onclick="api('/api/admin/launch-agents','POST')">Launch Agents</button>
+<button class="btn danger" onclick="api('/api/admin/kill-agents','POST')">Kill All Agents</button>
+</div></div>
+<div class="section"><h2>Data Management</h2><div class="btn-row">
+<button class="btn warn" onclick="api('/api/admin/wipe-data','POST')">Wipe Demo Data (re-seed prospects)</button>
+<button class="btn warn" onclick="api('/api/admin/clear-sessions','POST')">Clear Claude Sessions</button>
+</div></div>
+<div class="section"><h2>Full Reset</h2><div class="btn-row">
+<button class="btn danger" onclick="fullReset()">Full Reset: Kill + Wipe + Clear Sessions</button>
+</div></div>
+<div class="section"><h2>Server Status</h2><button class="btn" onclick="loadStats()">Refresh</button>
+<div class="status-box" id="statsBox">Click refresh...</div></div>
+<div id="logArea" class="log"></div>
+<div class="links"><a href="/">Dashboard</a><a href="https://github.com/SalesteqHoneyBadger/commercial-ops" target="_blank">GitHub</a></div>
+<script>
+function log(m){document.getElementById('logArea').textContent=new Date().toLocaleTimeString()+' - '+m}
+async function api(u,m){log('Sending...');try{var r=await fetch(u,{method:m||'GET'});var d=await r.json();log(d.message||JSON.stringify(d))}catch(e){log('Error: '+e.message)}}
+async function fullReset(){if(!confirm('Kill all agents, wipe all data, clear sessions?'))return;log('Killing agents...');await fetch('/api/admin/kill-agents',{method:'POST'});log('Wiping data...');await fetch('/api/admin/wipe-data',{method:'POST'});log('Clearing sessions...');await fetch('/api/admin/clear-sessions',{method:'POST'});log('Full reset complete.')}
+async function loadStats(){try{var r=await fetch('/api/admin/stats');var d=await r.json();document.getElementById('statsBox').textContent='MEMORY:\\n'+d.mem+'\\n\\nLOAD:\\n'+d.load+'\\n\\nTMUX:\\n'+d.tmux+'\\n\\nDATA:\\n'+d.dataFiles}catch(e){document.getElementById('statsBox').textContent='Error: '+e.message}}
+loadStats();
+</script></body></html>`);
+});
+
+app.listen(PORT, () => {
+  console.log(`Commercial Ops Dashboard running at http://localhost:${PORT}`);
 });
