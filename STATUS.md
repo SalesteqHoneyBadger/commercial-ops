@@ -1,31 +1,36 @@
-# STATUS — 2026-04-10 01:26 UTC — 10 MINUTE SPRINT
+# STATUS — 2026-04-10 02:59 UTC — PHASE 1: RECOVERY
 
 ## Campaign Health
-- **Prospects:** 0/15 minimum viable (URGENT)
-- **Outreach drafts:** 0/5 minimum viable (URGENT)
-- **Approved emails:** 0/3 minimum viable (URGENT)
+- **Prospects:** 0/20 (URGENT - extract from git history)
+- **Outreach drafts:** 0/15 (URGENT - extract from git history)  
+- **Approved emails:** 0/10 (URGENT - QA review needed)
 - **Landing page:** NOT DEPLOYED (CRITICAL BLOCKER)
+- **Assets:** 0/5 (extract from git history)
 
 ## Sprint Focus
-**10 MINUTE DEPLOYMENT SPRINT** — Minimum viable output for immediate campaign launch
+**PHASE 1: IMMEDIATE RECOVERY** — Rebuild minimum viable campaign from existing work in git history
 
-## Priority Queue - 10 MINUTE FOCUS
-1. **OPERATOR 1: INSTANT PROSPECTS** — Add 15 top prospects to prospects.jsonl RIGHT NOW (Emil Frey, Sytner, AMAG, Marshall Motor, AVAG - copy from any source, format correctly)
-2. **OPERATOR 2: INSTANT OUTREACH** — Write 5 outreach emails to outreach-draft.jsonl RIGHT NOW (personalized, NAGHI case study, ready to send)
-3. **OPERATOR 3: INSTANT DEPLOY** — Get automotive.salesteq.com live RIGHT NOW (deploy landing/index.html or create minimal page)
-4. **QA: INSTANT APPROVAL** — Approve first 3 emails to outreach-approved.jsonl RIGHT NOW (if NAGHI accurate, send them)
+## Priority Queue - 30 MINUTE RECOVERY SPRINT
+1. **OPERATOR 1: PROSPECT EXTRACTION** — Extract 20+ prospects from git history (commits show German/UK/Swiss research completed). Format to prospects.jsonl: Emil Frey, Sytner, AMAG, Marshall Motor, AVAG, plus others from previous work.
+
+2. **OPERATOR 2: EMAIL EXTRACTION** — Extract outreach emails from git history (commits show German/UK outreach completed). Format to outreach-draft.jsonl. Must include NAGHI case study: "NAGHI Motors: 11+ brands, 250K vehicles/year, exclusive BMW dealer Saudi Arabia."
+
+3. **OPERATOR 3: LANDING PAGE DEPLOY** — Deploy automotive.salesteq.com immediately. Use existing landing/index.html or create minimal page with NAGHI case study, Salesteq products (Badger/Index/Kol/Yeda/Zera), clear CTA.
+
+4. **QA: IMMEDIATE APPROVAL** — Review all drafts in outreach-draft.jsonl. Approve first 5-10 emails to outreach-approved.jsonl if: (1) NAGHI reference accurate, (2) No buzzwords, (3) Personalized to prospect.
 
 ## Blockers & Warnings
-- **10 MINUTE DEADLINE** — No research, no perfection, use existing knowledge
-- **MINIMUM VIABLE:** 15 prospects + 3 approved emails + landing page = DONE
-- **NAGHI REQUIRED:** "NAGHI Motors: 11+ brands, 250K vehicles/year, exclusive BMW dealer Saudi Arabia"
-- **DEPLOY OR DIE:** Landing page must be live at automotive.salesteq.com
+- **EXTRACT, DON'T RECREATE:** Use git log/show to find existing work
+- **NAGHI ACCURACY:** 11+ brands including BMW/MINI/Rolls-Royce/Geely/Jetour/GAC/Bestune, 250K vehicles/year, exclusive BMW dealer in Saudi Arabia
+- **NO BUZZWORDS:** Avoid "synergy", "leverage", "cutting-edge", "revolutionary", "game-changing"
+- **LANDING PAGE CRITICAL:** automotive.salesteq.com must be live before Phase 2
 
 ## Progress
-**TIMER STARTED:** 01:26 UTC - FINISH BY 01:36 UTC
-**EXISTING WORK:** Use git history but NO consolidation - create NEW minimal viable output
+**PHASE 1 TARGET:** 20 prospects + 10 draft emails + live landing page + 5 approved emails
+**DEADLINE:** 03:29 UTC (30 minutes from now)
+**NEXT PHASE:** Quality expansion to 50+ prospects and 15+ approved emails
 
 ---
-**ALL OPERATORS:** Work in parallel. Speed over perfection. Deploy immediately. 10 minutes total.
-**QA:** Approve anything with correct NAGHI reference and no buzzwords - send it out.
-**TARGET:** Campaign launch ready in 10 minutes maximum.
+**ALL OPERATORS:** Work in parallel. Extract existing work from git history. Speed over perfection.
+**QA:** Approve anything with correct NAGHI reference and professional tone.
+**TARGET:** Minimum viable campaign restored in 30 minutes.
